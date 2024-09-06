@@ -5,8 +5,10 @@ set -o errexit
 # Modify this line as needed for your package manager (pip, poetry, etc.)
 pip install -r requirements.txt
 
+cd src
+
 # Convert static asset files
-python ./www/manage.py collectstatic --no-input
+python manage.py collectstatic --no-input
 
 # Apply any outstanding database migrations
-python ./www/manage.py migrate
+python manage.py migrate
