@@ -5,8 +5,13 @@ from langchain_community.tools import TavilySearchResults
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig, chain
+import os
 
 load_dotenv()
+
+tavily_api_key = os.getenv("TAVILY_API_KEY")
+openai_api_key = os.getenv("OPENAI_API_KEY")
+
 
 
 
