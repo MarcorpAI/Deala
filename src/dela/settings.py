@@ -32,6 +32,16 @@ ALLOWED_HOSTS.extend(CUSTOM_DOMAINS)
 
 
 
+remove_domain = "dealapp-frontend.vercel.app"
+
+# Remove the domain if it exists in ALLOWED_HOSTS
+if remove_domain in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.remove(remove_domain)
+
+
+
+
+
 # Application definition
 
 INSTALLED_APPS = [
@@ -64,6 +74,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "https://deala-frontend-mark-kaaves-projects-7185adf0.vercel.app",
     "https://dealapp.vercel.app",
+    "https://mysite-sdvw.onrender.com",
 ]
 
 
