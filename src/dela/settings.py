@@ -63,6 +63,8 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:8080",
     "http://localhost:3000",
     "https://deala-frontend.vercel.app",
+    "https://deala-frontend-mark-kaaves-projects-7185adf0.vercel.app",
+    "https://dealapp.vercel.app",
 ]
 
 

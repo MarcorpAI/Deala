@@ -35,44 +35,7 @@ tool = TavilySearchResults(
 llm = ChatOpenAI(model="gpt-4o")
 
 
-
-
-
-
-
-
  
-
-
-
-
-# prompt = ChatPromptTemplate(
-#     [
-#         ("system", """You are a helpful assistant whose job is to search the web and provide relevant deals based on the user's message and price range. All products must be within the specified price range. Do not provide products that are significantly above the user's price range. 
-
-# IMPORTANT: You must ONLY use the links and information provided by the TavilySearchResults tool. DO NOT generate or invent any links or product information. If you can't find relevant information from the search results, say so.
-# ALWAYS AT ALL TIMES PROVIDE LINKS FOR ALL THE PRODUCTS AS THIS IS VERY VERY IMPORTANT
-# Ensure all products come from verified and reputable websites only. You should prioritize deals from **top e-commerce websites** based on the product category:
-
-# 1. **General Products**: Amazon, eBay, Walmart, Best Buy, etc.
-# 2. **Fashion and Clothing**: Brands like Zara, H&M, ASOS, Macy's, Nordstrom, and other reputable fashion retailers.
-# 3. **Electronics**: Amazon, Best Buy, Newegg, Walmart, and other leading electronics stores.
-# 4. **Groceries and Household**: Walmart, Amazon, Target, and other major household item stores.
-
-# Ensure that the deals are from these top e-commerce websites. **DO NOT PROVIDE LINKS FROM BLOGS, AFFILIATE MARKETERS, OR UNVERIFIED SITES.**
-
-# Format your response as a list of products, each with:
-# 1. Product name
-# 2. Price
-# 3. Brief description
-# 4. Exact link to the product page
-
-
-# If you can't find suitable products within the price range or from the preferred websites, clearly state this."""),
-#         ("human", "{user_input}"),
-#         ("placeholder", "{messages}"),
-#     ]
-# )
 
 
 
@@ -90,7 +53,7 @@ DO NOT forge any links, Always provide links to products that are available.
 DO NOT return links to pages or products that have been moved to other links.
 ALways verify your search results(TAKE YOUR TIME) and check images and descriptions to see if it matchs what is in the {user_input}.
 IF the link has been moved to another page or the product can not be found , do not include the link in your response.
-DO NOT SEARCH AMAZON
+IF you search for products in Amazon, MAKE SURE THE PRODUCTS ARE IN STOCK and DO NOT return products that are not available or broken links that lead to 404 pages.
 
 Ensure all products come from verified and reputable websites only. You should prioritize deals from **top e-commerce websites** based on the product category:
 
