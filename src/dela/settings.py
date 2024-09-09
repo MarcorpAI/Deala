@@ -62,19 +62,23 @@ MIDDLEWARE = [
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:8080",
     "http://localhost:3000",
-    "https://deala-frontend.vercel.app",
     "https://deala-frontend-mark-kaaves-projects-7185adf0.vercel.app",
     "https://dealapp.vercel.app",
-    "https://mysite-sdvw.onrender.com",
 ]
 
 
 
+
+
 REST_FRAMEWORK = {
+    'DEFAULT_RENDERER_CLASSES': [
+        'rest_framework.renderers.JSONRenderer',
+    ],
     'DEFAULT_PARSER_CLASSES': [
         'rest_framework.parsers.JSONParser',
-    ]
+    ],
 }
+
 
 ROOT_URLCONF = "dela.urls"
 
