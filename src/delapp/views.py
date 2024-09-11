@@ -15,7 +15,7 @@ from .llm_engine import tool_chain
 from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
 # Create your views here
-from ratelimit.decorators import ratelimit
+from django_ratelimit.decorators import ratelimit
 from django.utils.timezone import now, timedelta
 from django.views.decorators.csrf import ensure_csrf_cookie
 
