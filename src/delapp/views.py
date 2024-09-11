@@ -15,6 +15,9 @@ from .llm_engine import tool_chain
 from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
 # Create your views here
+from ratelimit.decorators import ratelimit
+from django.utils.timezone import now, timedelta
+from django.views.decorators.csrf import ensure_csrf_cookie
 
 import logging
 
@@ -31,16 +34,31 @@ logger = logging.getLogger(__name__)
 
 
 
+@ensure_csrf_cookie
+def get_csrf_token(request):
+    return JsonResponse({'csrfToken': request.META.get('CSRF_COOKIE')})
 
 
 
 
 
 
-
-@csrf_exempt
+@ratelimit(key='ip', rate='5/m', block=False)
 @api_view(['POST'])
 def user_query_api_view(request):
+
+    if getattr(request, 'limited', False):
+        # Calculate the retry time
+        retry_after = (now() + timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")
+        return Response(
+            {
+                "error": "Rate limit exceeded. Please try again later.",
+                "retry_after": retry_after  # Inform the user when they can retry
+            },
+            status=status.HTTP_429_TOO_MANY_REQUESTS
+        )
+
+
     form = EnterQueryForm(request.data)
     logger.info(f"Received request data: {request.data}")
 
