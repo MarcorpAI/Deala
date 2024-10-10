@@ -2,41 +2,46 @@ import dj_database_url
 import os
 
 from pathlib import Path
+# from delapp.models import User
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+from dotenv import load_dotenv
+from datetime import timedelta
 
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
+load_dotenv()
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = True
 
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', "616d-105-112-123-222.ngrok-free.app" , "1cd9-105-112-123-222.ngrok-free.app"]
+
+
+FRONTEND_URL = "https://1cd9-105-112-123-222.ngrok-free.app"
+
+# RENDER_EXTERNAL_HOSTNAME = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
+# if RENDER_EXTERNAL_HOSTNAME:
+#     ALLOWED_HOSTS.append(RENDER_EXTERNAL_HOSTNAME)
+
+
+# CUSTOM_DOMAINS = ["dealapp.vercel.app"]
+# # ALLOWED_HOSTS.extend(CUSTOM_DOMAINS)
+# ALLOWED_HOSTS.extend(['localhost', '127.0.0.1'])
 
 
 
-RENDER_EXTERNAL_HOSTNAME = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
-if RENDER_EXTERNAL_HOSTNAME:
-    ALLOWED_HOSTS.append(RENDER_EXTERNAL_HOSTNAME)
 
 
-CUSTOM_DOMAINS = ["dealapp.vercel.app"]
-ALLOWED_HOSTS.extend(CUSTOM_DOMAINS)
-
-
-
-
-remove_domain = "dealapp-frontend.vercel.app"
+# remove_domain = "dealapp-frontend.vercel.app"
 
 # Remove the domain if it exists in ALLOWED_HOSTS
-if remove_domain in ALLOWED_HOSTS:
-    ALLOWED_HOSTS.remove(remove_domain)
+# if remove_domain in ALLOWED_HOSTS:
+#     ALLOWED_HOSTS.remove(remove_domain)
 
 
 
@@ -47,6 +52,10 @@ if remove_domain in ALLOWED_HOSTS:
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
+    'django.contrib.sites',
+    'allauth',
+    'allauth.account',
+    'allauth.socialaccount',
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
@@ -54,7 +63,35 @@ INSTALLED_APPS = [
     "rest_framework",
     "delapp",
     "corsheaders",
+    'rest_framework_simplejwt',
+    
 ]
+
+SITE_ID = 1
+
+
+
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+}
+
+
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+}
+
+
+
+
+
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
@@ -66,40 +103,39 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "allauth.account.middleware.AccountMiddleware",
 ]
+
+
+
+AUTHENTICATION_BACKENDS = [
+    'django.contrib.auth.backends.ModelBackend',
+    'allauth.account.auth_backends.AuthenticationBackend',
+]
+
+
+# For development, you can use console email backend
+EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+
+
 
 
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:8080",
-    "http://localhost:3000",
-    "https://deala-frontend-mark-kaaves-projects-7185adf0.vercel.app",
-    "https://dealapp.vercel.app",
-    "https://mysite-sdvw.onrender.com",
+    "http://localhost:5173",
+    "https://1cd9-105-112-123-222.ngrok-free.app",
+    "https://6a5d-102-91-92-128.ngrok-free.app",
+    "https://fc1b-102-91-92-128.ngrok-free.app",
 ]
 
-CORS_ALLOW_CREDENTIALS = False
 
-
-
-
-# CORS_ALLOW_ALL_ORIGINS = True  # Temporary for debugging
-# CORS_ALLOW_CREDENTIALS = True
-# CORS_ALLOW_HEADERS = ['*']
-# CORS_ALLOW_METHODS = ['*']
+CORS_ALLOW_CREDENTIALS = True
 
 
 
 
 
 
-REST_FRAMEWORK = {
-    'DEFAULT_RENDERER_CLASSES': [
-        'rest_framework.renderers.JSONRenderer',
-    ],
-    'DEFAULT_PARSER_CLASSES': [
-        'rest_framework.parsers.JSONParser',
-    ],
-}
+
 
 
 ROOT_URLCONF = "dela.urls"
@@ -107,7 +143,7 @@ ROOT_URLCONF = "dela.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
+        "DIRS": [os.path.join(BASE_DIR, 'templates')],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -195,3 +231,75 @@ if not DEBUG:
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+
+
+
+
+
+
+
+
+
+
+
+
+###### LEMON SQUEEZY CONFIG
+
+
+# LEMON_SQUEEZY_WEBHOOK_SECRET = 
+
+
+
+AUTH_USER_MODEL = 'delapp.CustomUser'   
+ACCOUNT_EMAIL_VERIFICATION = "mandatory"
+ACCOUNT_EMAIL_REQUIRED = True
+ACCOUNT_AUTHENTICATION_METHOD = "email"
+
+
+
+
+
+### logging
+
+# In your settings.py file
+
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+        'delapp': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+    },
+}
+
+
+
+
+# settings.py
+ 
