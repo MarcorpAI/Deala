@@ -16,31 +16,21 @@ load_dotenv()
 SECRET_KEY = os.getenv('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+
+DEBUG = 'RENDER' not in os.environ
 
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1',  '127.0.0.1:5173', "a32c-105-112-178-95.ngrok-free.app", "fff1-105-112-178-95.ngrok-free.app", "try-deala.shop" ]
+# ALLOWED_HOSTS = ['localhost', '127.0.0.1',  '127.0.0.1:5173', "a32c-105-112-178-95.ngrok-free.app", "fff1-105-112-178-95.ngrok-free.app", "try-deala.shop" ] 
+
+ALLOWED_HOSTS = [
+    "mysite-sdvw.onrender.com",  # Your Render domain
+    'try-deala.shop',    # Your Vercel frontend domain
+    'localhost',
+    '127.0.0.1'
+]
 
 
-FRONTEND_URL = "https://a32c-105-112-178-95.ngrok-free.app" 
-# RENDER_EXTERNAL_HOSTNAME = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
-# if RENDER_EXTERNAL_HOSTNAME:
-#     ALLOWED_HOSTS.append(RENDER_EXTERNAL_HOSTNAME)
-
-
-# CUSTOM_DOMAINS = ["dealapp.vercel.app"]
-# # ALLOWED_HOSTS.extend(CUSTOM_DOMAINS)
-# ALLOWED_HOSTS.extend(['localhost', '127.0.0.1'])
-
-
-
-
-
-# remove_domain = "dealapp-frontend.vercel.app"
-
-# Remove the domain if it exists in ALLOWED_HOSTS
-# if remove_domain in ALLOWED_HOSTS:
-#     ALLOWED_HOSTS.remove(remove_domain)
+FRONTEND_URL = "https://try-deala.shop"
 
 
 
@@ -119,10 +109,9 @@ EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 CORS_ALLOW_HEADERS = list(default_headers) + [
     'ngrok-skip-browser-warning',
 ]
+
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
-    "https://a32c-105-112-178-95.ngrok-free.app",
-    "https://fff1-105-112-178-95.ngrok-free.app",
     "http://localhost:8000",
     "https://try-deala.shop"
 ]
@@ -225,6 +214,11 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 
 STATIC_URL = "static/"
+
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+STATICFILES_DIRS = [
+    os.path.join(BASE_DIR, 'static')
+]
 
 
 
