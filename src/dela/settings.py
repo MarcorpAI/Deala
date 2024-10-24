@@ -33,7 +33,7 @@ ALLOWED_HOSTS = [
 FRONTEND_URL = "https://try-deala.shop"
 
 
-
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
 
 # Application definition
@@ -170,11 +170,20 @@ WSGI_APPLICATION = "dela.wsgi.application"
 
 # Database documentation https://docs.djangoproject.com/en/5.0/ref/settings/#databases
 
+# DATABASES = {
+#     'default': dj_database_url.config(
+#         # Replace this value with your local database's connection string.
+#         default='postgresql://myuser:mypassword@localhost:5432/mydatabase',
+#         conn_max_age=600
+#     )
+# }
+
+
+
 DATABASES = {
     'default': dj_database_url.config(
-        # Replace this value with your local database's connection string.
-        default='postgresql://myuser:mypassword@localhost:5432/mydatabase',
-        conn_max_age=600
+        default=DATABASE_URL,
+        conn_max_age=600,
     )
 }
 
