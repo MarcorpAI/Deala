@@ -8,7 +8,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 from dotenv import load_dotenv
 from datetime import timedelta
-
+from corsheaders.defaults import default_headers
 
 load_dotenv()
 
@@ -19,11 +19,10 @@ SECRET_KEY = os.getenv('SECRET_KEY')
 DEBUG = True
 
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', "616d-105-112-123-222.ngrok-free.app" , "1cd9-105-112-123-222.ngrok-free.app"]
+ALLOWED_HOSTS = ['localhost', '127.0.0.1',  '127.0.0.1:5173', "a32c-105-112-178-95.ngrok-free.app", "fff1-105-112-178-95.ngrok-free.app", "try-deala.shop" ]
 
 
-FRONTEND_URL = "https://1cd9-105-112-123-222.ngrok-free.app"
-
+FRONTEND_URL = "https://a32c-105-112-178-95.ngrok-free.app" 
 # RENDER_EXTERNAL_HOSTNAME = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
 # if RENDER_EXTERNAL_HOSTNAME:
 #     ALLOWED_HOSTS.append(RENDER_EXTERNAL_HOSTNAME)
@@ -53,9 +52,7 @@ INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
     'django.contrib.sites',
-    'allauth',
-    'allauth.account',
-    'allauth.socialaccount',
+    
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
@@ -66,6 +63,8 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     
 ]
+
+
 
 SITE_ID = 1
 
@@ -103,14 +102,12 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
-    "allauth.account.middleware.AccountMiddleware",
 ]
 
 
 
 AUTHENTICATION_BACKENDS = [
     'django.contrib.auth.backends.ModelBackend',
-    'allauth.account.auth_backends.AuthenticationBackend',
 ]
 
 
@@ -119,18 +116,29 @@ EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 
 
 
-
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    'ngrok-skip-browser-warning',
+]
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
-    "https://1cd9-105-112-123-222.ngrok-free.app",
-    "https://6a5d-102-91-92-128.ngrok-free.app",
-    "https://fc1b-102-91-92-128.ngrok-free.app",
+    "https://a32c-105-112-178-95.ngrok-free.app",
+    "https://fff1-105-112-178-95.ngrok-free.app",
+    "http://localhost:8000",
+    "https://try-deala.shop"
 ]
 
 
 CORS_ALLOW_CREDENTIALS = True
 
 
+CORS_ALLOWED_METHODS = [
+    'GET',
+    'POST',
+    'PUT',
+    'PATCH',
+    'DELETE',
+    'OPTIONS'
+]
 
 
 
@@ -246,15 +254,20 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 ###### LEMON SQUEEZY CONFIG
 
+LEMON_SQUEEZY_API_KEY = os.getenv('LEMON_SQUEEZY_API_KEY')
+LEMON_SQUEEZY_STORE_ID = os.getenv('LEMON_SQUEEZY_STORE_ID')
+LEMON_SQUEEZY_REDIRECT_URL = 'https://a32c-105-112-178-95.ngrok-free.app/deala'
+LEMON_SQUEEZY_DEFAULT_PLAN_ID = os.getenv('LEMON_SQUEEZY_DEFAULT_PLAN_ID')
 
+LEMON_SQUEEZY_WEBHOOK_SECRET = os.getenv('LEMON_SQUEEZY_WEBHOOK_SECRET')
+
+LEMON_SQUEEZY_API_BASE_URL = "https://api.lemonsqueezy.com/v1/"
+LEMON_SQUEEZY_RECEIPT_LINK_URL = "https://a32c-105-112-178-95.ngrok-free.app/deala"
 # LEMON_SQUEEZY_WEBHOOK_SECRET = 
 
 
 
-AUTH_USER_MODEL = 'delapp.CustomUser'   
-ACCOUNT_EMAIL_VERIFICATION = "mandatory"
-ACCOUNT_EMAIL_REQUIRED = True
-ACCOUNT_AUTHENTICATION_METHOD = "email"
+AUTH_USER_MODEL = 'delapp.CustomUser'
 
 
 
@@ -265,41 +278,47 @@ ACCOUNT_AUTHENTICATION_METHOD = "email"
 # In your settings.py file
 
 
-LOGGING = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'formatters': {
-        'verbose': {
-            'format': '{levelname} {asctime} {module} {message}',
-            'style': '{',
-        },
-        'simple': {
-            'format': '{levelname} {message}',
-            'style': '{',
-        },
-    },
-    'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
-            'formatter': 'verbose',
-        },
-    },
-    'loggers': {
-        'django': {
-            'handlers': ['console'],
-            'level': 'DEBUG',
-            'propagate': True,
-        },
-        'delapp': {
-            'handlers': ['console'],
-            'level': 'DEBUG',
-            'propagate': True,
-        },
-    },
-}
+# LOGGING = {
+#     'version': 1,
+#     'disable_existing_loggers': False,
+#     'formatters': {
+#         'verbose': {
+#             'format': '{levelname} {asctime} {module} {message}',
+#             'style': '{',
+#         },
+#         'simple': {
+#             'format': '{levelname} {message}',
+#             'style': '{',
+#         },
+#     },
+#     'handlers': {
+#         'console': {
+#             'class': 'logging.StreamHandler',
+#             'formatter': 'verbose',
+#         },
+#     },
+#     'loggers': {
+#         'django': {
+#             'handlers': ['console'],
+#             'level': 'DEBUG',
+#             'propagate': True,
+#         },
+#         'delapp': {
+#             'handlers': ['console'],
+#             'level': 'DEBUG',
+#             'propagate': True,
+#         },
+#     },
+# }
 
 
 
 
 # settings.py
- 
+
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER")
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD")  # Gmail App password, not your Gmail account password

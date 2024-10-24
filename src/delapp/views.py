@@ -4,7 +4,7 @@ from django.urls import reverse
 from django.template.loader import render_to_string
 from django.utils.html import strip_tags
 ## Rest Framework
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework import status
@@ -14,12 +14,17 @@ import hashlib
 from django.core.exceptions import ObjectDoesNotExist
 from django.conf import settings
 import json
+from rest_framework.throttling import UserRateThrottle
 import requests
-from allauth.account.models import EmailAddress
+from langchain.schema import HumanMessage
+import re
+import base64
+from .utils import sanitize_input, validate_query
+from django.core.cache import cache
 import traceback
 from django.views.decorators.http import require_POST
 from langchain.schema import AIMessage
-from .llm_engine import tool_chain
+# from .llm_engine import tool_chain
 from langchain_openai import ChatOpenAI
 from .lemon_squeezy import create_checkout, verify_webhook
 import uuid
@@ -27,13 +32,16 @@ from django.utils.crypto import get_random_string
 from django.core.mail import send_mail
 from django.utils.decorators import method_decorator
 
+from django.http import HttpResponse
+from rest_framework.renderers import JSONRenderer
+
 from django.views import View
 from langchain_core.runnables import RunnableConfig, chain
 from .serializers import UserSerializer, QuerySerializer
 from django.http import JsonResponse
 
 from django.views.decorators.csrf import csrf_exempt
-from .llm_engine import tool_chain
+from .llm_engine import get_deals
 from dotenv import load_dotenv
 from django_ratelimit.decorators import ratelimit
 from django.utils.timezone import now, timedelta
@@ -41,6 +49,13 @@ from django.views.decorators.csrf import ensure_csrf_cookie, csrf_protect
 import logging
 from django.shortcuts import redirect
 from .lemonsqueezy_utils import subscription_required
+from langchain.prompts import ChatPromptTemplate
+from langchain.chat_models import ChatOpenAI
+
+from asgiref.sync import sync_to_async
+from .dataforseo_tool import DataForSEOTool
+from asgiref.sync import async_to_sync
+import asyncio
 
 
 
@@ -54,20 +69,26 @@ logger.debug("This is a test log for debugging")
 
 
 
+def generate_cache_key(user_id, query):
+    # Truncate the query if it's too long
+    truncated_query = query[:100]  # Adjust this number as needed
+    
+    # Create a string that combines user_id and the truncated query
+    key_base = f"query_{user_id}_{truncated_query}"
+    
+    # Hash the key_base to ensure it's a valid cache key
+    hashed_key = hashlib.md5(key_base.encode()).hexdigest()
+    
+    return f"query_hash:{hashed_key}"
 
 
 
 
 
-
-
-# @subscription_required
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def user_query_api_view(request):
     logger.info(f"Received request data: {request.data}")
     
-    # Create a mutable copy of request.data and add the user
     serializer = QuerySerializer(data=request.data, context={'request': request})
     
     if serializer.is_valid():
@@ -77,27 +98,21 @@ def user_query_api_view(request):
             return Response({"error": "Query cannot be empty."}, status=status.HTTP_400_BAD_REQUEST)
         
         try:
-            config = RunnableConfig()
-            ai_response = tool_chain.invoke(query_text, config=config)
+            ai_response = get_deals(query_text)
             
             logger.debug(f"AI Response: {ai_response}")
-            print("AI Response:", ai_response)  
+            print("AI Response:", ai_response)
             
-            if isinstance(ai_response, AIMessage):
-                ai_content = ai_response.content
-                deals = parse_deals(ai_content)
-                
-                # Save the query with the associated user
-                user_query = serializer.save()
-                
-                return Response({
-                    "query": query_text,
-                    "ai_response": ai_content,
-                    "deals": deals
-                }, status=status.HTTP_200_OK)
-            else:
-                logger.error(f"Unexpected AI response format: {type(ai_response)}")
-                return Response({"error": "Unexpected response format from AI."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            deals = parse_deals(ai_response)
+            
+            # Save the query with the associated user
+            user_query = serializer.save()
+            
+            return Response({
+                "query": query_text,
+                "ai_response": ai_response,
+                "deals": deals
+            }, status=status.HTTP_200_OK)
         
         except Exception as e:
             logger.exception(f"Error processing query: {str(e)}")
@@ -111,51 +126,141 @@ def user_query_api_view(request):
 
 
 
-
-
-
-
-# this code gets each attribute of every deal like the name, description, and the product link
 def parse_deals(ai_content):
-    # Initialize an empty list to hold the deals
-    deals = []
-    # Split the AI response into lines
-    lines = ai_content.split('\n')
-    # Initialize a dictionary to hold the current deal being processed
-    current_deal = {}
-    # Iterate over each line in the AI response
-    for line in lines:
-        # Check if the line starts with a number followed by a period, which indicates a new deal
-        if line.strip().startswith(('1.', '2.', '3.', '4.', '5.')):
-            # If there is an existing deal being processed, add it to the list of deals
-            if current_deal:
-                deals.append(current_deal)
-                current_deal = {}  # Reset the current deal dictionary for the next deal
-            # Extract the product name, which is formatted in bold with double asterisks
-            current_deal['name'] = line.split('**')[1]
-        # If the line contains price information, add it to the current deal
-        elif '**Price**' in line:
-            current_deal['price'] = line.split('**Price**:')[1].strip()
-        # If the line contains a description, add it to the current deal
-        elif '**Description**' in line:
-            current_deal['description'] = line.split('**Description**:')[1].strip()
-        # If the line contains a link, add it to the current deal
-        elif '**Link**' in line:
-            link_part = line.split('**Link**:')[1].strip()
-            current_deal['link'] = extract_link(link_part)
-        elif '[Link to product]' in line:
-            link_part = line.split('[Link to product]')[1].strip()
-            current_deal['link'] = extract_link(link_part)
-        elif '[Link]' in line:
-            link_part = line.split('[Link]')[1].strip()
-            current_deal['link'] = extract_link(link_part)
-    # After processing all lines, add the last deal if it exists
-    if current_deal:
-        deals.append(current_deal)
-    return deals
+    """
+    Parse the AI response into a structured format for deals
+    """
+    try:
+        if not ai_content or ai_content.lower().startswith("i'm sorry") or ai_content.lower().startswith("i am unable"):
+            return [{
+                "status": "no_deals_found",
+                "message": "No current deals found. Try modifying your search terms or check back later.",
+                "suggested_retailers": ["Amazon", "Best Buy", "Walmart", "Target"],
+                "suggested_actions": [
+                    "Set up price alerts",
+                    "Check during major sale events",
+                    "Consider similar products",
+                    "Monitor deal websites"
+                ]
+            }]
 
+        deals = []
+        # Split content into individual deals using numbered headers
+        deal_sections = ai_content.split('\n---\n')
+        if len(deal_sections) == 1:
+            deal_sections = ai_content.split('\n1. ')
+            if len(deal_sections) > 1:
+                deal_sections = ['1. ' + section for section in deal_sections[1:]]
+            else:
+                deal_sections = [ai_content]
 
-# this extracts the exact link to the url of each product and strips off every braces and special characters
+        for section in deal_sections:
+            if not section.strip():
+                continue
+
+            deal = {
+                'name': None,
+                'currentPrice': None,
+                'originalPrice': None,
+                'description': None,
+                'productLink': None,
+                'coupons': [],
+                'cashback': [],
+                'steps': [],
+                'expiration': None,
+                'savings': {
+                    'amount': None,
+                    'percentage': None
+                }
+            }
+
+            # Extract product name
+            name_match = section.split('**')
+            if len(name_match) > 1:
+                deal['name'] = name_match[1].strip()
+
+            # Extract prices
+            price_section = section.split('Base Price Details')[1].split('Additional Savings')[0] if 'Base Price Details' in section else ''
+            if 'Current Price:' in price_section:
+                current_price = price_section.split('Current Price:')[1].split('\n')[0].strip()
+                deal['currentPrice'] = current_price.replace('$', '').replace(',', '').strip()
+            if 'Original Price:' in price_section:
+                original_price = price_section.split('Original Price:')[1].split('\n')[0].strip()
+                deal['originalPrice'] = original_price.replace('$', '').replace(',', '').strip()
+
+            # Extract coupons
+            if 'Available Coupons:' in section:
+                coupon_section = section.split('Available Coupons:')[1].split('Cashback Offers:')[0]
+                coupon_lines = [line.strip() for line in coupon_section.split('\n') if 'Code:' in line]
+                for line in coupon_lines:
+                    if '-' in line:
+                        code, description = line.split('-', 1)
+                        code = code.replace('*', '').replace('Code:', '').strip()
+                        deal['coupons'].append({
+                            'code': code,
+                            'description': description.strip()
+                        })
+
+            # Extract cashback offers
+            if 'Cashback Offers:' in section:
+                cashback_section = section.split('Cashback Offers:')[1].split('Maximum Potential Savings:')[0]
+                cashback_lines = [line.strip() for line in cashback_section.split('\n') if '*' in line and ':' in line]
+                for line in cashback_lines:
+                    if 'No current cashback offers found' not in line:
+                        platform, amount = line.replace('*', '').split(':', 1)
+                        deal['cashback'].append({
+                            'platform': platform.strip(),
+                            'amount': amount.strip()
+                        })
+
+            # Extract product details
+            if 'Product Details:' in section:
+                details_section = section.split('Product Details:')[1].split('How to Get This Deal:')[0]
+                for line in details_section.split('\n'):
+                    line = line.strip()
+                    if 'Description:' in line:
+                        deal['description'] = line.split('Description:')[1].strip()
+                    elif 'Product URL:' in line:
+                        deal['productLink'] = line.split('Product URL:')[1].strip()
+                    elif 'Expiration:' in line:
+                        deal['expiration'] = line.split('Expiration:')[1].strip()
+
+            # Extract steps
+            if 'How to Get This Deal:' in section:
+                steps_section = section.split('How to Get This Deal:')[1].split('\n')
+                deal['steps'] = [step.strip().lstrip('123456789.') for step in steps_section if step.strip() and any(char.isdigit() for char in step)]
+
+            # Calculate savings
+            if deal['originalPrice'] and deal['currentPrice']:
+                try:
+                    original = float(deal['originalPrice'])
+                    current = float(deal['currentPrice'])
+                    if original > current:
+                        savings_amount = original - current
+                        savings_percentage = (savings_amount / original) * 100
+                        deal['savings'] = {
+                            'amount': f"{savings_amount:.2f}",
+                            'percentage': f"{savings_percentage:.1f}"
+                        }
+                except ValueError:
+                    pass
+
+            # Only add deals that have at least a name and price
+            if deal['name'] and (deal['currentPrice'] or deal['originalPrice']):
+                deals.append(deal)
+
+        return deals if deals else [{
+            "status": "no_deals_found",
+            "message": "No valid deals could be parsed from the response."
+        }]
+
+    except Exception as e:
+        logger.exception(f"Error parsing deals: {str(e)}")
+        return [{
+            "status": "error",
+            "message": "Error processing deal information",
+            "error": str(e)
+        }]
 
 def extract_link(link_part):
     # If the link is in markdown format [text](url)
@@ -170,8 +275,65 @@ def extract_link(link_part):
 
 
 
-##### AUTHENTICATION ########
 
+
+
+
+
+
+
+
+
+
+
+# # # this code gets each attribute of every deal like the name, description, and the product link
+# def parse_deals(ai_content):
+#     # Initialize an empty list to hold the deals
+#     deals = []
+#     # Split the AI response into lines
+#     lines = ai_content.split('\n')
+#     # Initialize a dictionary to hold the current deal being processed
+#     current_deal = {}
+#     # Iterate over each line in the AI response
+#     for line in lines:
+#         # Check if the line starts with a number followed by a period, which indicates a new deal
+#         if line.strip().startswith(('1.', '2.', '3.', '4.', '5.')):
+#             # If there is an existing deal being processed, add it to the list of deals
+#             if current_deal:
+#                 deals.append(current_deal)
+#                 current_deal = {}  # Reset the current deal dictionary for the next deal
+#             # Extract the product name, which is formatted in bold with double asterisks
+#             current_deal['name'] = line.split('**')[1]
+#         # If the line contains price information, add it to the current deal
+#         elif '**Price**' in line:
+#             current_deal['price'] = line.split('**Price**:')[1].strip()
+#         # If the line contains a description, add it to the current deal
+#         elif '**Description**' in line:
+#             current_deal['description'] = line.split('**Description**:')[1].strip()
+#         # If the line contains a link, add it to the current deal
+#         elif '**Link**' in line:
+#             link_part = line.split('**Link**:')[1].strip()
+#             current_deal['link'] = extract_link(link_part)
+#         elif '[Link to product]' in line:
+#             link_part = line.split('[Link to product]')[1].strip()
+#             current_deal['link'] = extract_link(link_part)
+#         elif '[Link]' in line:
+#             link_part = line.split('[Link]')[1].strip()
+#             current_deal['link'] = extract_link(link_part)
+#     # After processing all lines, add the last deal if it exists
+#     if current_deal:
+#         deals.append(current_deal)
+#     return deals
+
+
+
+
+
+
+
+
+
+##### AUTHENTICATION ########
 class CreateUserView(generics.CreateAPIView):
     queryset = CustomUser.objects.all()
     serializer_class = UserSerializer
@@ -179,8 +341,10 @@ class CreateUserView(generics.CreateAPIView):
 
     def perform_create(self, serializer):
         try:
+            # Save the user with inactive status
             user = serializer.save(is_active=False)  # Inactive until email is verified
-            EmailAddress.objects.create(user=user, email=user.email, verified=False, primary=True)
+            
+            # Generate verification token and save it in the CustomUser model
             token = get_random_string(length=32)
             user.verification_token = token
             user.save()
@@ -188,6 +352,7 @@ class CreateUserView(generics.CreateAPIView):
             # Construct verification URL
             full_url = f"{settings.FRONTEND_URL}/verify-email/{token}/"
 
+            # Render email template
             html_message = render_to_string('delapp/email.html', {'verification_url': full_url})
             plain_message = strip_tags(html_message)
 
@@ -206,96 +371,31 @@ class CreateUserView(generics.CreateAPIView):
 
 
 
-
-
-
 class VerifyEmailView(View):
     def get(self, request, token):
+        logger.info(f"Received GET request for token: {token}")
         try:
-            logger.info(f"Attempting to verify email with token: {token}")
-
             user = CustomUser.objects.get(verification_token=token)
-            logger.info(f"User found: {user.email}")
+            logger.info(f"Found user: {user.email}, is_active: {user.is_active}, email_verified: {user.email_verified}")
 
-            email_address = EmailAddress.objects.get(user=user, email=user.email)
-            logger.info(f"Email address found: {email_address.email}")
-
-            if not email_address.verified:
-                email_address.verified = True
-                email_address.save()
-                logger.info(f"Email address {email_address.email} marked as verified")
-
+            if not user.email_verified:
                 user.is_active = True
-                user.email_verified = True  # Make sure this field exists in your CustomUser model
+                user.email_verified = True
                 user.verification_token = None
                 user.save()
-                logger.info(f"User {user.email} is now active and token cleared")
-
+                logger.info(f"User {user.email} verified successfully. New status - is_active: {user.is_active}, email_verified: {user.email_verified}")
                 return JsonResponse({"message": "Email verified successfully!"})
             else:
-                logger.info(f"Email {email_address.email} was already verified")
+                logger.info(f"User {user.email} was already verified")
                 return JsonResponse({"message": "Email was already verified"})
 
         except CustomUser.DoesNotExist:
-            logger.error(f"Invalid token: {token}, User does not exist")
+            logger.warning(f"Invalid token received: {token}")
             return JsonResponse({"error": "Invalid token"}, status=400)
-        except EmailAddress.DoesNotExist:
-            logger.error(f"Email address not found for user: {user.email}")
-            return JsonResponse({"error": "Email address not found"}, status=400)
         except Exception as e:
-            logger.error(f"Unexpected error during email verification: {str(e)}")
+            logger.error(f"Unexpected error during email verification: {str(e)}", exc_info=True)
             return JsonResponse({"error": "An unexpected error occurred"}, status=500)
 
-
-# class VerifyEmailView(View):
-#     def get(self, request, token):
-#         user = get_object_or_404(CustomUser, verification_token=token)
-#         if user.email_verified:
-#             return JsonResponse({"message": "Email already verified!"}, status=400)
-
-#         # Verify the email and set user to active
-#         user.email_verified = True
-#         user.is_active = True
-#         user.verification_token = None  # Clear the token
-#         user.save()
-
-#         logger.info(f"Email verified for user: {user.email}")
-#         return JsonResponse({"message": "Email verified successfully!"})
-
-
-
-
-
-
- 
-
-# class VerifyEmailView(View):
-#     def get(self, request, token):
-#         try:
-#             logger.info(f"Attempting to verify email with token: {token}")
-#             user = CustomUser.objects.get(verification_token=token, email_verified=False)
-            
-#             user.verify_email()
-#             logger.info(f"Email verified successfully for user: {user.email}")
-            
-#             return JsonResponse({
-#                 "message": "Email verified successfully. You can now log in.",
-#                 "email": user.email
-#             })
-        
-#         except ObjectDoesNotExist:
-#             logger.warning(f"Invalid or already used token: {token}")
-#             return JsonResponse({
-#                 "error": "Invalid or expired verification link. Please request a new one."
-#             }, status=400)
-        
-#         except Exception as e:
-#             logger.error(f"Error during email verification: {str(e)}")
-#             return JsonResponse({
-#                 "error": "An unexpected error occurred. Please try again later."
-#             }, status=500)
-
- 
 
 
 
@@ -393,55 +493,7 @@ def process_webhook_data(payload):
         logger.error(f"Error processing webhook: {e}")
         return JsonResponse({'error': 'Processing error'}, status=500)
 
-# def handle_subscription_created(payload):
-#     try:
-
-
-
-#         logger.info(f"Received subscription_created webhook with payload: {payload}")
-
-#         # Adjust subscription_data extraction based on the actual structure of the payload
-#         subscription_data = payload.get('data', {}).get('attributes', {})
-#         subscription_data = payload.get('data', {}).get('object', {})
-
-
-
-#         user_email = subscription_data.get('user_email')
-#         lemonsqueezy_subscription_id = subscription_data.get('id')
-#         lemonsqueezy_customer_id = subscription_data.get('customer_id')
-#         subscription_start_date = subscription_data.get('created_at')
-#         subscription_end_date = subscription_data.get('ends_at')
-
-#         # Fetch the user associated with the subscription
-#         user = CustomUser.objects.get(email=user_email)
-
-#         user.lemonsqueezy_customer_id = lemonsqueezy_customer_id  # Save customer ID to user model
-#         user.save()
-
-#         # Update or create the subscription for this user
-#         subscription, created = UserSubscription.objects.update_or_create(
-#             user=user,
-#             defaults={
-#                 'lemonsqueezy_subscription_id': lemonsqueezy_subscription_id,
-#                 'is_active': True,
-#                 'subscription_start_date': subscription_start_date,
-#                 'subscription_end_date': subscription_end_date
-#             }
-#         )
-
-#         if created:
-#             logger.info(f"New subscription created for user {user_email}")
-#         else:
-#             logger.info(f"Subscription updated for user {user_email}")
-
-#     except CustomUser.DoesNotExist:
-#         logger.error(f"User with email {user_email} does not exist.")
-#     except Exception as e:
-#         logger.error(f"Error handling subscription created: {e}")
-
-
-
-
+ 
 
 
 
@@ -472,9 +524,9 @@ def handle_subscription_created(payload):
             }
         )
 
-        user.is_active = True
-        user.email_verified = True
-        user.save()
+        # user.is_active = True
+        # user.email_verified = True
+        # user.save()
 
         if created:
             logger.info(f"New subscription created for user {user_email}")
@@ -561,3 +613,20 @@ def check_subscription(request):
         })
     except UserSubscription.DoesNotExist:
         return JsonResponse({'is_subscribed': False, 'error': 'No subscription found'})
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 

@@ -12,6 +12,7 @@ from .managers import CustomUserManager
 
 
 
+
 # class CustomUser(AbstractBaseUser, PermissionsMixin):
 #     email = models.EmailField(unique=True)
 #     first_name = models.CharField(max_length=40, blank=True)
@@ -85,7 +86,7 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
 class UserQuery(models.Model):
     query  = models.TextField(max_length=1000)
     date_created = models.DateTimeField(auto_now_add=True)
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="query")
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="query")
 
 
 
@@ -94,7 +95,7 @@ class UserQuery(models.Model):
 
 
 class UserSubscription(models.Model):
-    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)
     is_active = models.BooleanField(default=False)
     lemonsqueezy_subscription_id = models.CharField(max_length=255, blank=True, null=True)
     subscription_start_date = models.DateTimeField(null=True, blank=True)

@@ -3,71 +3,8 @@ from django.conf import settings
 import hmac
 import hashlib
 
-
-
-
-
-
-
-
-
-
-
-# def create_checkout(variant_id, user_email, customer_id):
-#     store_id = settings.LEMON_SQUEEZY_STORE_ID
-#     headers = {
-#         'Accept': 'application/vnd.api+json',
-#         'Content-Type': 'application/vnd.api+json',
-#         'Authorization': f'Bearer {settings.LEMON_SQUEEZY_API_KEY}'
-#     }
-    
-#     payload = {
-#         "data": {
-#             "type": "checkouts",
-#             "attributes": {
-#                 "store_id": int(store_id),
-#                 "variant_id": int(variant_id),
-#                 "custom_price":None,
-#                 "product_options": {
-#                     "name": "Checkout",
-#                     "description": "Subscription Checkout",
-#                     "redirect_url": settings.LEMON_SQUEEZY_REDIRECT_URL,
-#                     "receipt_thank_you_note": "Thank you for your purchase!",
-#                     "receipt_link_url": settings.LEMON_SQUEEZY_RECEIPT_LINK_URL,
-#                     "receipt_button_text": "Continue"
-#                 },
-#                 "checkout_data": {
-#                     "email": user_email,
-#                     "customer_id": customer_id
-#                 }
-#             },
-#             "relationships": {
-#                 "store":{
-#                     "data": {
-#                         "type": "stores",
-#                         "id":settings.LEMON_SQUEEZY_STORE_ID
-#                     }
-#                 },
-#                 "variant":{
-#                     "data":{
-#                         "type": "variants",
-#                         "id": variant_id
-#                     }
-#                 }
-#             }
-#         }
-#     }
-    
-#     response = requests.post(f'{LEMON_SQUEEZY_API_URL}/checkouts', json=payload, headers=headers)
-#     response.raise_for_status()
-#     return response.json()
-
- 
-
-
-
 LEMON_SQUEEZY_API_URL = 'https://api.lemonsqueezy.com/v1'
-LEMON_SQUEEZY_WEBHOOK_SECRET = "Q_Nb>~b7Z+hEA<[rl`&PO'x^WR<ugU"
+LEMON_SQUEEZY_WEBHOOK_SECRET = settings.LEMON_SQUEEZY_WEBHOOK_SECRET
 
 
 def create_checkout(variant_id, user_email, customer_id):
