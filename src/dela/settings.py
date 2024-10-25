@@ -30,7 +30,7 @@ ALLOWED_HOSTS = [
 ]
 
 
-FRONTEND_URL = "https://try-deala.shop"
+FRONTEND_URL = "https://www.try-deala.shop"
 
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -113,8 +113,33 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:8000",
-    "https://try-deala.shop"
+    "https://www.try-deala.shop",
+    "https://try-deala.shop",
+    "https://mysite-sdvw.onrender.com"
 ]
+
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https:\/\/(?:www\.)?try-deala\.shop$",  # Matches both www and non-www
+    r"^http:\/\/localhost:[0-9]+$",  # Matches any localhost port
+]
+
+
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+]
+
+
+
+
+
 
 
 CORS_ALLOW_CREDENTIALS = True
@@ -259,13 +284,13 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 LEMON_SQUEEZY_API_KEY = os.getenv('LEMON_SQUEEZY_API_KEY')
 LEMON_SQUEEZY_STORE_ID = os.getenv('LEMON_SQUEEZY_STORE_ID')
-LEMON_SQUEEZY_REDIRECT_URL = 'https://a32c-105-112-178-95.ngrok-free.app/deala'
+LEMON_SQUEEZY_REDIRECT_URL = 'https://try-deala.shop/deala'
 LEMON_SQUEEZY_DEFAULT_PLAN_ID = os.getenv('LEMON_SQUEEZY_DEFAULT_PLAN_ID')
 
 LEMON_SQUEEZY_WEBHOOK_SECRET = os.getenv('LEMON_SQUEEZY_WEBHOOK_SECRET')
 
 LEMON_SQUEEZY_API_BASE_URL = "https://api.lemonsqueezy.com/v1/"
-LEMON_SQUEEZY_RECEIPT_LINK_URL = "https://a32c-105-112-178-95.ngrok-free.app/deala"
+LEMON_SQUEEZY_RECEIPT_LINK_URL = "https://try-deala.shop/deala"
 # LEMON_SQUEEZY_WEBHOOK_SECRET = 
 
 
