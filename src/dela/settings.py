@@ -20,8 +20,6 @@ SECRET_KEY = os.getenv('SECRET_KEY')
 DEBUG = 'RENDER' not in os.environ
 
 
-# ALLOWED_HOSTS = ['localhost', '127.0.0.1',  '127.0.0.1:5173', "a32c-105-112-178-95.ngrok-free.app", "fff1-105-112-178-95.ngrok-free.app", "try-deala.shop" ] 
-
 ALLOWED_HOSTS = [
     "mysite-sdvw.onrender.com",  # Your Render domain
     'try-deala.shop',    # Your Vercel frontend domain
@@ -51,6 +49,7 @@ INSTALLED_APPS = [
     "delapp",
     "corsheaders",
     'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',
     
 ]
 
@@ -75,6 +74,32 @@ REST_FRAMEWORK = {
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+    'ROTATE_REFRESH_TOKENS': False,  # Changed to True to allow token rotation
+    'BLACKLIST_AFTER_ROTATION': False,
+    'UPDATE_LAST_LOGIN': True,  # Changed to True to track last login
+
+    'ALGORITHM': 'HS256',
+    'SIGNING_KEY': os.environ.get('SECRET_KEY'),
+    'VERIFYING_KEY': None,
+    'AUDIENCE': None,
+    'ISSUER': None,
+
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',
+    'USER_ID_FIELD': 'id',
+    'USER_ID_CLAIM': 'user_id',
+    'USER_AUTHENTICATION_RULE': 'rest_framework_simplejwt.authentication.default_user_authentication_rule',
+
+    'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
+    'TOKEN_TYPE_CLAIM': 'token_type',
+    
+    # Add these new settings
+    'JTI_CLAIM': 'jti',
+    'TOKEN_USER_CLASS': 'rest_framework_simplejwt.models.TokenUser',
+    
+    'SLIDING_TOKEN_REFRESH_EXP_CLAIM': 'refresh_exp',
+    'SLIDING_TOKEN_LIFETIME': timedelta(minutes=60),
+    'SLIDING_TOKEN_REFRESH_LIFETIME': timedelta(days=1),
 }
 
 
@@ -106,10 +131,6 @@ AUTHENTICATION_BACKENDS = [
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 
 
-
-CORS_ALLOW_HEADERS = list(default_headers) + [
-    'ngrok-skip-browser-warning',
-]
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
