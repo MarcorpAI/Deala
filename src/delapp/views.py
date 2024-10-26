@@ -9,7 +9,9 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework import status
 from rest_framework import generics
+from rest_framework.views import APIView
 import hmac
+from rest_framework_simplejwt.views import TokenObtainPairView
 import hashlib
 from django.core.exceptions import ObjectDoesNotExist
 from django.conf import settings
@@ -282,48 +284,7 @@ def extract_link(link_part):
 
 
 
-
-
-
-
-# # # this code gets each attribute of every deal like the name, description, and the product link
-# def parse_deals(ai_content):
-#     # Initialize an empty list to hold the deals
-#     deals = []
-#     # Split the AI response into lines
-#     lines = ai_content.split('\n')
-#     # Initialize a dictionary to hold the current deal being processed
-#     current_deal = {}
-#     # Iterate over each line in the AI response
-#     for line in lines:
-#         # Check if the line starts with a number followed by a period, which indicates a new deal
-#         if line.strip().startswith(('1.', '2.', '3.', '4.', '5.')):
-#             # If there is an existing deal being processed, add it to the list of deals
-#             if current_deal:
-#                 deals.append(current_deal)
-#                 current_deal = {}  # Reset the current deal dictionary for the next deal
-#             # Extract the product name, which is formatted in bold with double asterisks
-#             current_deal['name'] = line.split('**')[1]
-#         # If the line contains price information, add it to the current deal
-#         elif '**Price**' in line:
-#             current_deal['price'] = line.split('**Price**:')[1].strip()
-#         # If the line contains a description, add it to the current deal
-#         elif '**Description**' in line:
-#             current_deal['description'] = line.split('**Description**:')[1].strip()
-#         # If the line contains a link, add it to the current deal
-#         elif '**Link**' in line:
-#             link_part = line.split('**Link**:')[1].strip()
-#             current_deal['link'] = extract_link(link_part)
-#         elif '[Link to product]' in line:
-#             link_part = line.split('[Link to product]')[1].strip()
-#             current_deal['link'] = extract_link(link_part)
-#         elif '[Link]' in line:
-#             link_part = line.split('[Link]')[1].strip()
-#             current_deal['link'] = extract_link(link_part)
-#     # After processing all lines, add the last deal if it exists
-#     if current_deal:
-#         deals.append(current_deal)
-#     return deals
+ 
 
 
 
@@ -333,72 +294,229 @@ def extract_link(link_part):
 
 
 
-##### AUTHENTICATION ########
+# ##### AUTHENTICATION ########
+# class CreateUserView(generics.CreateAPIView):
+#     queryset = CustomUser.objects.all()
+#     serializer_class = UserSerializer
+#     permission_classes = [AllowAny]
+
+#     def perform_create(self, serializer):
+#         try:
+#             # Save the user with inactive status
+#             user = serializer.save(is_active=False)  # Inactive until email is verified
+            
+#             # Generate verification token and save it in the CustomUser model
+#             token = get_random_string(length=32)
+#             user.verification_token = token
+#             user.save()
+
+#             # Construct verification URL
+#             full_url = f"{settings.FRONTEND_URL}/verify-email/{token}/"
+
+#             # Render email template
+#             html_message = render_to_string('delapp/email.html', {'verification_url': full_url})
+#             plain_message = strip_tags(html_message)
+
+#             # Send the verification email
+#             send_mail(
+#                 subject="Verify your email address",
+#                 message=plain_message,
+#                 html_message=html_message,
+#                 from_email=settings.DEFAULT_FROM_EMAIL,
+#                 recipient_list=[user.email],
+#             )
+
+#         except Exception as e:
+#             logger.error(f"Error during user registration: {str(e)}")
+#             raise
+
+
+
+# class VerifyEmailView(View):
+#     def get(self, request, token):
+#         logger.info(f"Received GET request for token: {token}")
+#         try:
+#             user = CustomUser.objects.get(verification_token=token)
+#             logger.info(f"Found user: {user.email}, is_active: {user.is_active}, email_verified: {user.email_verified}")
+
+#             if not user.email_verified:
+#                 user.is_active = True
+#                 user.email_verified = True
+#                 user.verification_token = None
+#                 user.save()
+#                 logger.info(f"User {user.email} verified successfully. New status - is_active: {user.is_active}, email_verified: {user.email_verified}")
+#                 return JsonResponse({"message": "Email verified successfully!"})
+#             else:
+#                 logger.info(f"User {user.email} was already verified")
+#                 return JsonResponse({"message": "Email was already verified"})
+
+#         except CustomUser.DoesNotExist:
+#             logger.warning(f"Invalid token received: {token}")
+#             return JsonResponse({"error": "Invalid token"}, status=400)
+#         except Exception as e:
+#             logger.error(f"Unexpected error during email verification: {str(e)}", exc_info=True)
+#             return JsonResponse({"error": "An unexpected error occurred"}, status=500)
+
+
+
+
+
+
+
 class CreateUserView(generics.CreateAPIView):
     queryset = CustomUser.objects.all()
     serializer_class = UserSerializer
     permission_classes = [AllowAny]
-
+    
     def perform_create(self, serializer):
         try:
-            # Save the user with inactive status
-            user = serializer.save(is_active=False)  # Inactive until email is verified
+            # Check if email already exists
+            email = serializer.validated_data.get('email')
+            if CustomUser.objects.filter(email=email).exists():
+                raise serializers.ValidationError({
+                    "email": "A user with this email already exists."
+                })
             
-            # Generate verification token and save it in the CustomUser model
-            token = get_random_string(length=32)
-            user.verification_token = token
-            user.save()
-
+            # Save user with inactive status
+            user = serializer.save(
+                is_active=False,
+                email_verified=False,
+                verification_token=get_random_string(64),  # Longer token for security
+                verification_token_created=timezone.now()  # Track token creation time
+            )
+            
             # Construct verification URL
-            full_url = f"{settings.FRONTEND_URL}/verify-email/{token}/"
-
-            # Render email template
-            html_message = render_to_string('delapp/email.html', {'verification_url': full_url})
+            verification_url = f"{settings.FRONTEND_URL}/verify-email/{user.verification_token}/"
+            
+            # Prepare email content
+            context = {
+                'verification_url': verification_url,
+                'user_email': user.email,
+                'expiry_hours': 24  # Token validity period
+            }
+            
+            html_message = render_to_string('delapp/email.html', context)
             plain_message = strip_tags(html_message)
-
-            # Send the verification email
-            send_mail(
+            
+            # Send verification email
+            email_sent = send_mail(
                 subject="Verify your email address",
                 message=plain_message,
                 html_message=html_message,
                 from_email=settings.DEFAULT_FROM_EMAIL,
                 recipient_list=[user.email],
+                fail_silently=False
             )
-
+            
+            if not email_sent:
+                logger.error(f"Failed to send verification email to {user.email}")
+                user.delete()  # Rollback user creation if email fails
+                raise serializers.ValidationError({
+                    "email": "Failed to send verification email. Please try again."
+                })
+                
+            logger.info(f"User created successfully: {user.email}")
+            
         except Exception as e:
-            logger.error(f"Error during user registration: {str(e)}")
-            raise
+            logger.error(f"Error during user registration: {str(e)}", exc_info=True)
+            raise serializers.ValidationError({
+                "error": "Registration failed. Please try again later."
+            })
+
+
+
+
+class CustomTokenObtainPairView(TokenObtainPairView):
+    def post(self, request, *args, **kwargs):
+        try:
+            # Get the response from parent class
+            response = super().post(request, *args, **kwargs)
+            
+            # If login successful, get the user
+            if response.status_code == 200:
+                user = self.user
+                
+                # Log successful login
+                logger.info(f"Successful login for user: {user.email} from IP: {request.META.get('REMOTE_ADDR')}")
+                
+                # You can add additional data to the response if needed
+                response.data.update({
+                    'email': user.email,
+                    'is_active': user.is_active,
+                    'email_verified': user.email_verified
+                })
+                
+            return response
+            
+        except Exception as e:
+            logger.error(f"Login error: {str(e)}", exc_info=True)
+            return Response({
+                'error': 'Login failed. Please check your credentials and try again.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+
+
+
+
 
 
 
 class VerifyEmailView(View):
+    permission_classes = [AllowAny]
+    
     def get(self, request, token):
-        logger.info(f"Received GET request for token: {token}")
+        logger.info(f"Processing email verification for token: {token}")
+        
         try:
-            user = CustomUser.objects.get(verification_token=token)
-            logger.info(f"Found user: {user.email}, is_active: {user.is_active}, email_verified: {user.email_verified}")
-
-            if not user.email_verified:
-                user.is_active = True
-                user.email_verified = True
-                user.verification_token = None
+            # Get user and validate token
+            user = CustomUser.objects.get(
+                verification_token=token,
+                is_active=False,
+                email_verified=False
+            )
+            
+            # Check token expiration (24 hours)
+            token_age = timezone.now() - user.verification_token_created
+            if token_age > timedelta(hours=24):
+                logger.warning(f"Expired verification token for user {user.email}")
+                
+                # Generate new token and send new email
+                user.verification_token = get_random_string(64)
+                user.verification_token_created = timezone.now()
                 user.save()
-                logger.info(f"User {user.email} verified successfully. New status - is_active: {user.is_active}, email_verified: {user.email_verified}")
-                return JsonResponse({"message": "Email verified successfully!"})
-            else:
-                logger.info(f"User {user.email} was already verified")
-                return JsonResponse({"message": "Email was already verified"})
-
+                
+                # Send new verification email...
+                return Response({
+                    "error": "Verification link expired. A new link has been sent to your email.",
+                    "expired": True
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Activate user
+            user.is_active = True
+            user.email_verified = True
+            user.verification_token = None
+            user.verification_token_created = None
+            user.save()
+            
+            logger.info(f"User {user.email} verified successfully")
+            
+            return Response({
+                "message": "Email verified successfully!",
+                "verified": True
+            }, status=status.HTTP_200_OK)
+            
         except CustomUser.DoesNotExist:
-            logger.warning(f"Invalid token received: {token}")
-            return JsonResponse({"error": "Invalid token"}, status=400)
+            logger.warning(f"Invalid verification token: {token}")
+            return Response({
+                "error": "Invalid verification link.",
+                "invalid": True
+            }, status=status.HTTP_400_BAD_REQUEST)
+            
         except Exception as e:
-            logger.error(f"Unexpected error during email verification: {str(e)}", exc_info=True)
-            return JsonResponse({"error": "An unexpected error occurred"}, status=500)
-
-
-
-
+            logger.error(f"Verification error: {str(e)}", exc_info=True)
+            return Response({
+                "error": "Verification failed. Please try again later."
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 

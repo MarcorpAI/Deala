@@ -45,6 +45,7 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     lemonsqueezy_customer_id = models.CharField(max_length=255, blank=True, null=True)
     email_verified = models.BooleanField(default=False)  # New field
     verification_token = models.CharField(max_length=100, blank=True, null=True)  # New field
+    verification_token_created = models.DateTimeField(null=True, blank=True)
 
     objects = CustomUserManager()
 
