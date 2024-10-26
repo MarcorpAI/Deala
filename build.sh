@@ -14,4 +14,4 @@ python manage.py collectstatic --no-input
 python manage.py makemigrations
 python manage.py migrate
 
-python manage.py flush_expired_tokens
+python manage.py flushexpiredtokens
