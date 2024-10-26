@@ -430,17 +430,20 @@ class CreateUserView(generics.CreateAPIView):
 class CustomTokenObtainPairView(TokenObtainPairView):
     def post(self, request, *args, **kwargs):
         try:
-            # Get the response from parent class
+            # Get the response from the parent class (this will contain the tokens)
             response = super().post(request, *args, **kwargs)
             
-            # If login successful, get the user
+            # If login was successful, retrieve the user instance from the serializer
             if response.status_code == 200:
-                user = self.user
-                
+                # Use `serializer.validated_data.get('user')` to get the user after validation
+                serializer = self.get_serializer(data=request.data)
+                serializer.is_valid(raise_exception=True)
+                user = serializer.user  # Access user through serializer
+
                 # Log successful login
                 logger.info(f"Successful login for user: {user.email} from IP: {request.META.get('REMOTE_ADDR')}")
                 
-                # You can add additional data to the response if needed
+                # Add user information to the response data if needed
                 response.data.update({
                     'email': user.email,
                     'is_active': user.is_active,
@@ -448,14 +451,12 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                 })
                 
             return response
-            
+
         except Exception as e:
             logger.error(f"Login error: {str(e)}", exc_info=True)
             return Response({
                 'error': 'Login failed. Please check your credentials and try again.'
             }, status=status.HTTP_400_BAD_REQUEST)
-
-
 
 
 
