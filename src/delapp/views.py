@@ -462,7 +462,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 
 
 
-class VerifyEmailView(View):
+class VerifyEmailView(APIView):
     permission_classes = [AllowAny]
     
     def get(self, request, token):
