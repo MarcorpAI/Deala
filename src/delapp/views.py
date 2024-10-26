@@ -11,6 +11,7 @@ from rest_framework import status
 from rest_framework import generics
 from rest_framework.views import APIView
 import hmac
+from rest_framework import serializers
 from rest_framework_simplejwt.views import TokenObtainPairView
 import hashlib
 from django.core.exceptions import ObjectDoesNotExist
@@ -53,7 +54,7 @@ from django.shortcuts import redirect
 from .lemonsqueezy_utils import subscription_required
 from langchain.prompts import ChatPromptTemplate
 from langchain.chat_models import ChatOpenAI
-
+from django.utils import timezone
 from asgiref.sync import sync_to_async
 from .dataforseo_tool import DataForSEOTool
 from asgiref.sync import async_to_sync
