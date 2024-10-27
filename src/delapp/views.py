@@ -629,6 +629,10 @@ def handle_subscription_created(payload):
         subscription_end_date = subscription_data.get('ends_at')
         variant_id = subscription_data.get('variant_id') 
 
+
+        subscription_status = subscription_data.get('status')
+        is_active = subscription_status == 'active'
+
         # Fetch the user associated with the subscription
         user = CustomUser.objects.get(email=user_email)
 
@@ -643,10 +647,9 @@ def handle_subscription_created(payload):
                 'variant_id': variant_id
             }
         )
-
-        # user.is_active = True
-        # user.email_verified = True
-        # user.save()
+        user.is_active = True
+        user.email_verified = True
+        user.save()
 
         if created:
             logger.info(f"New subscription created for user {user_email}")
