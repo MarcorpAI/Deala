@@ -722,20 +722,71 @@ def handle_order_created(payload):
 
 
 
-
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def check_subscription(request):
     try:
-        subscription = UserSubscription.objects.get(user=request.user)
+        logger.info(f"Checking subscription for user: {request.user.email}")
+        
+        subscription = UserSubscription.objects.filter(
+            user=request.user,
+            is_active=True
+        ).first()
+        
+        if subscription:
+            # Check if subscription has expired
+            from django.utils import timezone
+            is_expired = (
+                subscription.subscription_end_date and 
+                subscription.subscription_end_date < timezone.now()
+            )
+            
+            if is_expired:
+                logger.info(f"Subscription expired for user {request.user.email}")
+                subscription.is_active = False
+                subscription.save()
+                return JsonResponse({
+                    'is_subscribed': False,
+                    'error': 'Subscription expired'
+                })
+                
+            logger.info(f"Found active subscription for user {request.user.email}")
+            return JsonResponse({
+                'is_subscribed': True,
+                'subscription_id': subscription.lemonsqueezy_subscription_id,
+                'start_date': subscription.subscription_start_date,
+                'end_date': subscription.subscription_end_date,
+            })
+        else:
+            logger.info(f"No active subscription found for user {request.user.email}")
+            return JsonResponse({
+                'is_subscribed': False,
+                'error': 'No active subscription found'
+            })
+            
+    except Exception as e:
+        logger.error(f"Error checking subscription for user {request.user.email}: {str(e)}")
         return JsonResponse({
-            'is_subscribed': subscription.is_active,
-            'subscription_id': subscription.lemonsqueezy_subscription_id,
-            'start_date': subscription.subscription_start_date,
-            'end_date': subscription.subscription_end_date,
+            'is_subscribed': False,
+            'error': 'Error checking subscription status'
         })
-    except UserSubscription.DoesNotExist:
-        return JsonResponse({'is_subscribed': False, 'error': 'No subscription found'})
+
+
+
+
+# @api_view(['GET'])
+# @permission_classes([IsAuthenticated])
+# def check_subscription(request):
+#     try:
+#         subscription = UserSubscription.objects.get(user=request.user)
+#         return JsonResponse({
+#             'is_subscribed': subscription.is_active,
+#             'subscription_id': subscription.lemonsqueezy_subscription_id,
+#             'start_date': subscription.subscription_start_date,
+#             'end_date': subscription.subscription_end_date,
+#         })
+#     except UserSubscription.DoesNotExist:
+#         return JsonResponse({'is_subscribed': False, 'error': 'No subscription found'})
 
 
 
