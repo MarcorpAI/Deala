@@ -427,19 +427,55 @@ class CreateUserView(generics.CreateAPIView):
 
 
 
+# class CustomTokenObtainPairView(TokenObtainPairView):
+#     def post(self, request, *args, **kwargs):
+#         try:
+#             # Get the response from the parent class (this will contain the tokens)
+#             response = super().post(request, *args, **kwargs)
+            
+#             # If login was successful, retrieve the user instance from the serializer
+#             if response.status_code == 200:
+#                 # Use `serializer.validated_data.get('user')` to get the user after validation
+#                 serializer = self.get_serializer(data=request.data)
+#                 serializer.is_valid(raise_exception=True)
+#                 user = serializer.user  # Access user through serializer
+
+#                 # Log successful login
+#                 logger.info(f"Successful login for user: {user.email} from IP: {request.META.get('REMOTE_ADDR')}")
+                
+#                 # Add user information to the response data if needed
+#                 response.data.update({
+#                     'email': user.email,
+#                     'is_active': user.is_active,
+#                     'email_verified': user.email_verified
+#                 })
+                
+#             return response
+
+#         except Exception as e:
+#             logger.error(f"Login error: {str(e)}", exc_info=True)
+#             return Response({
+#                 'error': 'Login failed. Please check your credentials and try again.'
+#             }, status=status.HTTP_400_BAD_REQUEST)
+
+
+
+
+
 class CustomTokenObtainPairView(TokenObtainPairView):
     def post(self, request, *args, **kwargs):
         try:
-            # Get the response from the parent class (this will contain the tokens)
+            # Get the serializer and validate the data
+            serializer = self.get_serializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            
+            # Access the user instance from the validated data
+            user = serializer.validated_data['user']
+
+            # Generate the response with the tokens and user data
             response = super().post(request, *args, **kwargs)
             
-            # If login was successful, retrieve the user instance from the serializer
             if response.status_code == 200:
-                # Use `serializer.validated_data.get('user')` to get the user after validation
-                serializer = self.get_serializer(data=request.data)
-                serializer.is_valid(raise_exception=True)
-                user = serializer.user  # Access user through serializer
-
                 # Log successful login
                 logger.info(f"Successful login for user: {user.email} from IP: {request.META.get('REMOTE_ADDR')}")
                 
@@ -449,7 +485,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                     'is_active': user.is_active,
                     'email_verified': user.email_verified
                 })
-                
+
             return response
 
         except Exception as e:
@@ -457,8 +493,6 @@ class CustomTokenObtainPairView(TokenObtainPairView):
             return Response({
                 'error': 'Login failed. Please check your credentials and try again.'
             }, status=status.HTTP_400_BAD_REQUEST)
-
-
 
 
 
