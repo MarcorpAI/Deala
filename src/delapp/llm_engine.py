@@ -293,6 +293,9 @@ Here's the REQUIRED format:
 2. [Order of applying discounts]
 3. [Special requirements]
 
+Feel free to return Products from affiliate sites and multiple sites so i can compare prices and have more options.
+you will get $100 tip if you can deliver this properly.
+
 ---"""
 
 
