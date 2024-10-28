@@ -1,5 +1,5 @@
 from django.shortcuts import render
-from .models import UserQuery, UserSubscription, CustomUser
+from .models import UserQuery, UserSubscription, CustomUser, UserDevice
 from django.urls import reverse
 from django.template.loader import render_to_string
 from django.utils.html import strip_tags
@@ -15,6 +15,7 @@ from rest_framework import serializers
 from rest_framework_simplejwt.views import TokenObtainPairView
 import hashlib
 from django.core.exceptions import ObjectDoesNotExist
+from rest_framework_simplejwt.tokens import RefreshToken
 from django.conf import settings
 import json
 from rest_framework.throttling import UserRateThrottle
@@ -460,39 +461,58 @@ class CreateUserView(generics.CreateAPIView):
 
 
 
+class CustomTokenObtainPairSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    password = serializers.CharField()
+    device_id = serializers.CharField(required=False)
 
+    def validate(self, attrs):
+        email = attrs.get("email")
+        password = attrs.get("password")
+        device_id = attrs.get("device_id")
+
+        user = CustomUser.objects.filter(email=email).first()
+        if user and user.check_password(password):
+            if not user.is_active:
+                raise serializers.ValidationError("This account is inactive.")
+            # Generate token pair for user
+            refresh = RefreshToken.for_user(user)
+
+            # Optional: Store device-specific information if using device tracking
+            if device_id:
+                UserDevice.objects.update_or_create(
+                    user=user,
+                    device_id=device_id,
+                    defaults={"refresh_token": str(refresh)}
+                )
+
+            return {
+                "access": str(refresh.access_token),
+                "refresh": str(refresh),
+            }
+        else:
+            raise serializers.ValidationError("Invalid credentials.")
 
 class CustomTokenObtainPairView(TokenObtainPairView):
+    serializer_class = CustomTokenObtainPairSerializer
+
     def post(self, request, *args, **kwargs):
-        try:
-            # Get the serializer and validate the data
-            serializer = self.get_serializer(data=request.data)
-            serializer.is_valid(raise_exception=True)
-            
-            # Access the user instance from the validated data
-            user = serializer.validated_data['user']
+        # Log the login attempt
+        logger.info(f"Login attempt from IP: {request.META.get('REMOTE_ADDR')} for device: {request.data.get('device_id')}")
+        return super().post(request, *args, **kwargs)
 
-            # Generate the response with the tokens and user data
-            response = super().post(request, *args, **kwargs)
-            
-            if response.status_code == 200:
-                # Log successful login
-                logger.info(f"Successful login for user: {user.email} from IP: {request.META.get('REMOTE_ADDR')}")
-                
-                # Add user information to the response data if needed
-                response.data.update({
-                    'email': user.email,
-                    'is_active': user.is_active,
-                    'email_verified': user.email_verified
-                })
 
-            return response
 
-        except Exception as e:
-            logger.error(f"Login error: {str(e)}", exc_info=True)
-            return Response({
-                'error': 'Login failed. Please check your credentials and try again.'
-            }, status=status.HTTP_400_BAD_REQUEST)
+
+
+
+
+
+
+
+
+
+
 
 
 
