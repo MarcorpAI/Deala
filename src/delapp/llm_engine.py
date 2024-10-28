@@ -295,6 +295,7 @@ Here's the REQUIRED format:
 
 Feel free to return Products from affiliate sites and multiple sites so i can compare prices and have more options.
 you will get $100 tip if you can deliver this properly.
+YOU MUST NEVER provide links to 404 pages at anytime, Validate all product links before giving them to me.
 
 ---"""
 
