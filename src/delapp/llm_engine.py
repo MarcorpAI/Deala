@@ -1,51 +1,44 @@
-from tavily import TavilyClient
-
 from dotenv import load_dotenv
-from langchain_community.tools import TavilySearchResults
 from langchain_community.chat_models import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig, chain
 import os
-from  langchain_core.runnables.config import run_in_executor
-from langchain_community.utilities.dataforseo_api_search import DataForSeoAPIWrapper
+from langchain_core.runnables.config import run_in_executor
+from .models import ProductDeal, UserPreference  # Changed this line
 from langchain.chains import LLMChain
+from langchain.memory import ConversationBufferMemory
+from dataclasses import dataclass
+from typing import List, Dict, Optional
 import json
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_community.utilities.tavily_search import TavilySearchAPIWrapper
+import logging
+import re
+from langchain_groq import ChatGroq
+from .deal_providers import DealAggregator
+from transformers import pipeline
+
+#nlp imports 
+import spacy
+from textblob import TextBlob
+import re
+from dataclasses import dataclass
+from nltk.corpus import wordnet
+from nltk.tokenize import word_tokenize
+import logging
+
+
+logger = logging.getLogger(__name__)
 load_dotenv()
-
-tavily_api_key = os.getenv("TAVILY_API_KEY")
-openai_api_key = os.getenv("OPENAI_API_KEY")
-
-
-
  
 
 
 
-
-
-
-
-
-
-
-
-
-tavily_search = TavilySearchResults(
-    max_results=10,
-    search_depth="advanced",
-    include_answer=True,
-    include_raw_content=True,
-    include_images=True,
-    # include_domains=[
-    #     "ebay.com", "walmart.com", "bestbuy.com", "newegg.com", "asos.com", "macys.com", "hm.com", "nordstrom.com", "amazon.com"
-    # ]
-    # exclude_domains=[...],
-    # name="...",            # overwrite default tool name
-    # description="...",     # overwrite default tool description
-    # args_schema=...,       # overwrite default args_schema: BaseModel
-)
+@dataclass
+class UserPreference:
+    """Store user preferences for deal searching"""
+    preferred_condition: Optional[str] = None  # New, Used, Refurbished
+    max_price: Optional[float] = None
+    min_rating: Optional[float] = None
+    favorite_categories: List[str] = None
 
 
 
@@ -56,464 +49,951 @@ tavily_search = TavilySearchResults(
 
 
 
+@dataclass
+class ProductSearchParams:
+    product_type: str
+    attributes: List[str]
+    colors: List[str]
+    style_references: Optional[Dict[str, str]]
+
+    price_range: Dict[str, Optional[float]]
+    occasion: Optional[str]
 
 
 
+from langchain_groq import ChatGroq
+import json
+import logging
+import re
+from dataclasses import dataclass
+from typing import Dict, Optional, List
+import spacy
+from textblob import TextBlob
+
+import nltk
+nltk.download('wordnet')
+
+# class UniversalSearchExtractor:
+#     def __init__(self):
+#         # Initialize Groq model
+#         self.llm = ChatGroq(model="deepseek-r1-distill-llama-70b", temperature=0.3)
+#         # Load spaCy model for fallback parsing
+#         try:
+#             self.nlp = spacy.load('en_core_web_sm')
+#         except OSError:
+#             logging.warning("Downloading spaCy model...")
+#             import subprocess
+#             subprocess.run(["python", "-m", "spacy", "download", "en_core_web_sm"])
+#             self.nlp = spacy.load('en_core_web_sm')
+
+#     def extract_search_parameters(self, query: str) -> Dict:
+#         """
+#         Dynamically extract search parameters from any query using Groq
+#         """
+#         prompt = f"""
+#         Analyze this shopping query carefully. Consider the main product and any contextual requirements.
+#         Focus on what the user actually wants to buy, not just mentioned items.
+        
+#         For example:
+#         - "suit that goes with black tie" → Main product is a suit, black tie is context
+#         - "running shoes and socks" → Two products: running shoes, socks
+#         - "dress for a beach wedding" → Main product is a dress, beach/wedding are contexts
+
+#         In some cases , the User might be searching for multiple products at once, so you mus make sure you include those products in the search keywords as well.
+        
+#         For example:
+#         - "i am going for a dinner and i need what to wear, i want to buy a midi dress, high heels (most be comfortable), and a purse -> Here the user has expressed need for multipl products, A purse , a dress and high heels.
+#         - "i am looking for some home furniture a desk an ergonimic chair, a lamp and some wall shelves -> Here the user has expressed need for multiple products, A desk , an ergonimic chair, a lamp and some wall shelves. 
+#         SO ALWAYS KEEP THIS IN MIND WHEN ANALYZING THE QUERY. VERY IMPORTANT.
+        
+#         Return a JSON object with the following keys:
+#         {{
+#             "product_type": "main product category",
+#             "key_attributes": ["list of descriptive features"],
+#             "color": "color if mentioned, null if not",
+#             "brand": "brand if mentioned, null if not",
+#             "price_range": {{
+#                 "min": null or minimum price number,
+#                 "max": null or maximum price number
+#             }},
+#             "search_keywords": ["important search terms"]
+#         }}
+
+#         Query: {query}
+#         """
+
+#         try:
+#             # Get response from Groq
+#             response = self.llm.invoke(prompt)
+            
+#             # Extract JSON from response
+#             content = response.content
+#             json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            
+#             if json_match:
+#                 parameters = json.loads(json_match.group(0))
+#                 return parameters
+            
+#             return self._fallback_parse(query)
+
+#         except Exception as e:
+#             logging.error(f"Search parameter extraction error: {str(e)}")
+#             return self._fallback_parse(query)
 
 
-
-# def create_search_queries(base_query):
-#     """Create specialized search queries for different types of searches"""
-#     return {
-#         "regular": base_query,
-#         "coupons": f"{base_query} coupon code promo deals site:rakuten.com OR site:retailmenot.com OR site:groupon.com OR site:coupons.com",
-#         "cashback": f"{base_query} cashback rewards site:rakuten.com OR site:topcashback.com OR site:ibotta.com OR site:mrrebates.com"
-#     }
-
-
-
-def create_search_queries(base_query):
-    """Create more targeted search queries for different types of searches"""
-    return {
-        "regular": f"{base_query} best price deals discount sale",
-        "coupons": f"{base_query} promo code coupon discount site:retailmenot.com OR site:rakuten.com OR site:slickdeals.net OR site:dealnews.com",
-        "cashback": f"{base_query} cashback rewards site:rakuten.com OR site:topcashback.com OR site:retailmenot.com"
-    }
-
-
-
-
-
-
-def debug_print(message, data):
-    """Helper function to print debug information"""
-    print(f"\n=== {message} ===")
-    print(json.dumps(data, indent=2, default=str))
-
-def create_search_queries(base_query):
-    """Create specialized search queries for different types of searches"""
-    return {
-        "regular": base_query,
-        "coupons": f"{base_query} coupon code promo deals site:rakuten.com OR site:retailmenot.com OR site:groupon.com OR site:coupons.com",
-        "cashback": f"{base_query} cashback rewards site:rakuten.com OR site:topcashback.com OR site:ibotta.com OR site:mrrebates.com"
-    }
-
-def perform_single_search(query, search_type="regular"):
-    """Perform a single search and return raw results for debugging"""
-    try:
-        print(f"\nExecuting {search_type} search for: {query}")
-        # Adjust max_results based on search type
-        tavily_search.max_results = 10 if search_type == "regular" else 5
-        results = tavily_search.invoke(query)
-        debug_print(f"{search_type.upper()} SEARCH RESULTS", results)
-        return results
-    except Exception as e:
-        print(f"Error in {search_type} search: {str(e)}")
-        return []
-
-
-
-
-
-
-
-
-def perform_searches(query_text):
-    """Enhanced search function with better error handling and result formatting"""
-    queries = create_search_queries(query_text)
-    results = {}
     
-    for search_type, search_query in queries.items():
+
+    
+     
+
+#     def _fallback_parse(self, query: str) -> Dict:
+#         """Basic fallback parsing method"""
+#         return {
+#             "product_type": self._extract_product_type(query),
+#             "key_attributes": self._extract_attributes(query),
+#             "color": self._extract_color(query),
+#             "brand": None,
+#             "price_range": {
+#                 "min": None,
+#                 "max": self._extract_max_price(query)
+#             },
+#             "search_keywords": query.split()
+#         }
+
+#     def _extract_product_type(self, query: str) -> str:
+#         """Extract product type using spaCy"""
+#         product_types = [
+#             'laptop', 'phone', 'dress', 'shoes', 
+#             'camera', 'headphones', 'watch', 
+#             'bag', 'computer', 'tablet'
+#         ]
+        
+#         doc = self.nlp(query.lower())
+        
+#         # Check for nouns that match product types
+#         for token in doc:
+#             if token.lemma_ in product_types:
+#                 return token.lemma_
+            
+#         # Look for nouns if no specific product type is found
+#         for token in doc:
+#             if token.pos_ == 'NOUN':
+#                 return token.lemma_
+        
+#         return 'item'
+
+#     def _extract_attributes(self, query: str) -> List[str]:
+#         """Extract descriptive attributes using spaCy"""
+#         doc = self.nlp(query.lower())
+        
+#         attributes = []
+#         for token in doc:
+#             # Look for adjectives and relevant descriptors
+#             if token.pos_ == 'ADJ':
+#                 attributes.append(token.text)
+        
+#         return attributes
+
+#     def _extract_color(self, query: str) -> Optional[str]:
+#         """Extract color from query"""
+#         colors = [
+#             'red', 'blue', 'green', 'yellow', 
+#             'black', 'white', 'purple', 'pink', 
+#             'orange', 'brown', 'gray', 'grey',
+#             'silver', 'gold', 'navy', 'maroon'
+#         ]
+        
+#         query_lower = query.lower()
+#         words = query_lower.split()
+        
+#         # Check for exact color matches
+#         for color in colors:
+#             if color in words:
+#                 return color
+                
+#         # Check for color variations
+#         for word in words:
+#             for color in colors:
+#                 if color in word:  # catches things like "blackish", "bluish", etc.
+#                     return color
+        
+#         return None
+
+#     def _extract_max_price(self, query: str) -> Optional[float]:
+#         """Extract maximum price using regex"""
+#         price_patterns = [
+#             r'under\s*\$?(\d+(?:\.\d{2})?)',
+#             r'less\s*than\s*\$?(\d+(?:\.\d{2})?)',
+#             r'\$?(\d+(?:\.\d{2})?)\s*or\s*less',
+#             r'max(?:imum)?\s*\$?(\d+(?:\.\d{2})?)',
+#             r'up\s*to\s*\$?(\d+(?:\.\d{2})?)'
+#         ]
+        
+#         for pattern in price_patterns:
+#             match = re.search(pattern, query, re.IGNORECASE)
+#             if match:
+#                 try:
+#                     return float(match.group(1))
+#                 except ValueError:
+#                     continue
+        
+#         return None
+
+#     def _extract_price_range(self, query: str) -> Dict[str, Optional[float]]:
+#         """Extract price range using regex"""
+#         # Pattern for range like "between $100 and $200" or "$100-$200"
+#         range_patterns = [
+#             r'between\s*\$?(\d+(?:\.\d{2})?)\s*(?:and|to|-)\s*\$?(\d+(?:\.\d{2})?)',
+#             r'\$?(\d+(?:\.\d{2})?)\s*(?:-|to)\s*\$?(\d+(?:\.\d{2})?)'
+#         ]
+        
+#         for pattern in range_patterns:
+#             match = re.search(pattern, query, re.IGNORECASE)
+#             if match:
+#                 try:
+#                     return {
+#                         "min": float(match.group(1)),
+#                         "max": float(match.group(2))
+#                     }
+#                 except ValueError:
+#                     continue
+        
+#         # If no range found, check for maximum price
+#         max_price = self._extract_max_price(query)
+#         return {
+#             "min": None,
+#             "max": max_price
+#         }
+
+
+
+
+
+class UniversalSearchExtractor:
+    def __init__(self):
+        # Initialize Groq model
+        self.llm = ChatGroq(model="deepseek-r1-distill-llama-70b", temperature=0.3)
+        # Load spaCy model for fallback parsing
+
+
         try:
-            # Adjust max_results based on search type for better relevance
-            tavily_search.max_results = 15 if search_type == "regular" else 8
-            raw_results = tavily_search.invoke(search_query)
+            self.nlp = spacy.load('en_core_web_sm')
+        except OSError:
+            logging.warning("Downloading spaCy model...")
+            import subprocess
+            subprocess.run(["python", "-m", "spacy", "download", "en_core_web_sm"])
+            self.nlp = spacy.load('en_core_web_sm')
+
+    def extract_search_parameters(self, query: str) -> Dict:
+        """
+        Dynamically extract search parameters for multiple products from a query
+        """
+        logger.info(f"Starting parameter extraction for query: {query}")
+        
+        prompt = f"""
+        Analyze this shopping query and identify ALL products the user wants to buy.
+        Pay special attention to multiple items and their individual requirements.
+        
+        Return a JSON object with the following structure:
+        {{
+            "products": [
+                {{
+                    "product_type": "main product category",
+                    "key_attributes": ["list of descriptive features"],
+                    "color": "color if mentioned, null if not",
+                    "brand": "brand if mentioned, null if not",
+                    "price_range": {{
+                        "min": null or minimum price number,
+                        "max": null or maximum price number
+                    }},
+                    "search_keywords": ["important search terms"]
+                }}
+            ],
+            "shared_context": {{
+                "occasion": "event/occasion if mentioned",
+                "urgency": "timeframe if mentioned",
+                "location": "location if relevant",
+                "overall_budget": "total budget if mentioned"
+            }}
+        }}
+
+        Query: {query}
+        """
+
+        try:
+            logger.info("Sending query to LLM for analysis")
+            response = self.llm.invoke(prompt)
+            logger.info(f"Received LLM response: {response.content}")
             
-            # Enhanced result filtering and cleaning
-            formatted_results = []
-            seen_urls = set()  # To prevent duplicate results
+            content = response.content
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
             
-            for result in raw_results:
-                url = result.get('url', '').strip()
-                if not url or url in seen_urls:
-                    continue
-                    
-                # Ensure URL is properly formatted
-                if not url.startswith(('http://', 'https://')):
-                    url = f'https://{url}'
-                    
-                # Extract domain for filtering
-                domain = url.split('/')[2] if len(url.split('/')) > 2 else ''
-                
-                # Skip results from unwanted domains
-                if any(blocked in domain for blocked in ['facebook.com', 'twitter.com', 'instagram.com']):
-                    continue
-                
-                # Clean and format the content
-                content = result.get('content', '').strip()
-                content = ' '.join(content.split())  # Normalize whitespace
-                
-                formatted_result = {
-                    'title': result.get('title', '').strip(),
-                    'link': url,
-                    'snippet': content,
-                    'type': search_type,
-                    'source': domain,
-                    'score': result.get('score', 0)
+            if json_match:
+                parameters = json.loads(json_match.group(0))
+                logger.info(f"Successfully parsed parameters: {parameters}")
+                return self._enrich_parameters(parameters, query)
+            else:
+                logger.warning("No JSON found in LLM response, falling back to basic parsing")
+                return self._fallback_parse(query)
+
+        except Exception as e:
+            logger.error(f"Error in parameter extraction: {str(e)}")
+            logger.error(f"Full error details: {traceback.format_exc()}")
+            return self._fallback_parse(query)
+
+
+    def _enrich_parameters(self, parameters: Dict, query: str) -> Dict:
+        """
+        Enrich the extracted parameters with additional analysis
+        """
+        try:
+            # Add sentiment analysis for each product
+            for product in parameters.get('products', []):
+                # Analyze sentiment for product requirements
+                sentiment = TextBlob(' '.join(product.get('key_attributes', [])))
+                product['sentiment'] = {
+                    'polarity': sentiment.sentiment.polarity,
+                    'subjectivity': sentiment.sentiment.subjectivity
                 }
                 
-                formatted_results.append(formatted_result)
-                seen_urls.add(url)
-            
-            # Sort results by relevance score
-            formatted_results.sort(key=lambda x: x.get('score', 0), reverse=True)
-            results[search_type] = formatted_results
-            
+                # Expand search keywords with synonyms
+                expanded_keywords = set(product.get('search_keywords', []))
+                for keyword in list(expanded_keywords):
+                    synsets = wordnet.synsets(keyword)
+                    for synset in synsets[:2]:  # Limit to top 2 synonyms
+                        for lemma in synset.lemmas():
+                            if '_' not in lemma.name():  # Avoid multi-word synonyms
+                                expanded_keywords.add(lemma.name())
+                product['search_keywords'] = list(expanded_keywords)
+
+            return parameters
+
         except Exception as e:
-            logger.exception(f"Error in {search_type} search: {str(e)}")
-            results[search_type] = []
-    
-    return results
+            logging.error(f"Error enriching parameters: {str(e)}")
+            return parameters
 
-# Initialize OpenAI ChatGPT
-llm = ChatOpenAI(model="gpt-4o")
-
-# # Updated prompt to ensure clean URL formatting
-# prompt = ChatPromptTemplate.from_messages([
-#     ("system", """You are an advanced shopping assistant whose job is to find the best possible savings by combining deals, coupons, and cashback offers. 
-
-# IMPORTANT FORMATTING RULES:
-# 1. NEVER use Markdown link formatting [text](url). Instead, always provide clean, direct URLs.
-# 2. ALWAYS include full URLs starting with http:// or https://
-# 3. Separate URLs from descriptions with a clear dash or colon.
-# 4. Each link should be on its own line.
-
-# Format your response as follows:
-
-# # Best Savings Found
-
-# For each product:
-
-# 1. **Product Name**
-# 2. **Base Price Details**:
-#    - Current Price: $XX.XX
-#    - Original Price: $XX.XX (if available)
-#    - Direct Discount: XX% off
-
-# 3. **Additional Savings**:
-#    - Available Coupons:
-#      * Code: COUPON_CODE - Description ($XX or XX% off)
-#      * Restrictions (if any)
-#    - Cashback Offers:
-#      * Platform: XX% cashback
-#      * Minimum purchase requirements (if any)
-
-# 4. **Maximum Potential Savings**:
-#    - Original Price: $XX.XX
-#    - Final Price: $XX.XX
-#    - Total Savings: $XX.XX (XX%)
-   
-# 5. **Product Details**:
-#    - Description: Brief description
-#    - Retailer: Store name
-#    - Product URL: https://full-product-url.com
-#    - Coupon URL: https://full-coupon-url.com
-#    - Cashback URL: https://full-cashback-url.com
-#    - Expiration: Date or "Limited Time"
-
-# 6. **How to Get This Deal**:
-#    1. Step-by-step instructions
-#    2. Order of applying discounts
-#    3. Special requirements
-
-# Remember: Always use complete URLs starting with http:// or https:// and never use Markdown formatting for links."""),
-#     ("human", "{query}"),
-#     ("human", "Regular search results: {regular_results}"),
-#     ("human", "Coupon search results: {coupon_results}"),
-#     ("human", "Cashback search results: {cashback_results}")
-# ])
-
-# Create an LLMChain
-
-
-
-SYSTEM_PROMPT = """You are an advanced shopping assistant whose job is to find the best possible savings by combining deals, coupons, and cashback offers. 
-
-Follow these STRICT formatting rules:
-1. Each deal MUST include ALL of the following sections in order:
-   - Product Name (with model/variant if applicable)
-   - Current Price (ALWAYS in $XX.XX format)
-   - Original Price (if available, in $XX.XX format)
-   - Direct Discount percentage
-   - ALL available coupons with exact codes
-   - ALL cashback offers with exact percentages/amounts
-   - Final price after ALL discounts
-   - Total savings in both dollars and percentage
-   - Complete product description
-   - Direct product URL (must start with http:// or https://)
-   - Expiration date or "Limited Time"
-   - Step-by-step instructions
-
-2. Format REQUIREMENTS:
-   - Use EXACT section headers as shown in the template
-   - Include ALL price values with $ symbol
-   - List ALL savings opportunities
-   - Separate deals with "---"
-   - NO markdown links
-   - FULL URLs only
-
-Here's the REQUIRED format:
-
-1. **[Product Name]**
-**Base Price Details**:
-- Current Price: $XX.XX
-- Original Price: $XX.XX
-- Direct Discount: XX%
-
-**Additional Savings**:
-- Available Coupons:
-  * Code: [EXACT_CODE] - [Amount/Percentage] off
-  * Restrictions: [if any]
-- Cashback Offers:
-  * [Platform]: [Exact percentage/amount]
-
-**Maximum Potential Savings**:
-- Original Price: $XX.XX
-- Final Price: $XX.XX
-- Total Savings: $XX.XX (XX%)
-
-**Product Details**:
-- Description: [Clear, detailed description]
-- Retailer: [Store name]
-- Product URL: [Full URL]
-- Expiration: [Date or "Limited Time"]
-
-**How to Get This Deal**:
-1. [Step-by-step instructions]
-2. [Order of applying discounts]
-3. [Special requirements]
-
-Feel free to return Products from affiliate sites and multiple sites so i can compare prices and have more options.
-you will get $100 tip if you can deliver this properly.
-YOU MUST NEVER provide links to 404 pages at anytime, Validate all product links before giving them to me.
-
----"""
-
-
-
-def get_deals(query_text):
-    """Enhanced function to get and process deals"""
-    try:
-        # Get search results with improved error handling
-        all_results = perform_searches(query_text)
+    def _fallback_parse(self, query: str) -> Dict:
+        """Enhanced fallback parsing for multiple products"""
+        doc = self.nlp(query.lower())
         
-        # Create prompt with improved structure
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", SYSTEM_PROMPT),
-            ("human", "Search Query: {query}"),
-            ("human", "Regular results: {regular_results}"),
-            ("human", "Coupon results: {coupon_results}"),
-            ("human", "Cashback results: {cashback_results}")
+        # Initialize results
+        products = []
+        current_product = {}
+        attributes = []
+        colors = set()
+        
+        # Common color terms
+        color_terms = {
+            'red', 'blue', 'green', 'yellow', 'black', 'white', 'purple',
+            'pink', 'orange', 'brown', 'gray', 'grey', 'silver', 'gold'
+        }
+        
+        # Extract price ranges
+        price_ranges = self._extract_price_ranges(query)
+        
+        # Process each token
+        for token in doc:
+            # Handle colors
+            if token.text in color_terms:
+                colors.add(token.text)
+                
+            # Handle adjectives
+            if token.pos_ == 'ADJ':
+                attributes.append(token.text)
+                
+            # Handle nouns (potential products)
+            if token.pos_ == 'NOUN' and not token.text in color_terms:
+                if current_product:
+                    current_product['key_attributes'] = attributes.copy()
+                    current_product['color'] = list(colors)[0] if colors else None
+                    products.append(current_product)
+                    attributes = []
+                    colors = set()
+                
+                current_product = {
+                    "product_type": token.text,
+                    "key_attributes": [],
+                    "color": None,
+                    "brand": None,
+                    "price_range": self._get_price_range(token.text, price_ranges),
+                    "search_keywords": [token.text]
+                }
+        
+        # Add the last product if exists
+        if current_product:
+            current_product['key_attributes'] = attributes
+            current_product['color'] = list(colors)[0] if colors else None
+            products.append(current_product)
+        
+        # If no products found, treat entire query as one product
+        if not products:
+            products = [{
+                "product_type": "item",
+                "key_attributes": attributes,
+                "color": list(colors)[0] if colors else None,
+                "brand": None,
+                "price_range": {"min": None, "max": None},
+                "search_keywords": query.split()
+            }]
+
+        return {
+            "products": products,
+            "shared_context": {
+                "occasion": self._extract_occasion(query),
+                "urgency": self._extract_urgency(query),
+                "location": self._extract_location(query),
+                "overall_budget": self._extract_overall_budget(query)
+            }
+        }
+
+    def _extract_price_ranges(self, query: str) -> List[Dict]:
+        """Extract all price ranges mentioned in the query"""
+        price_ranges = []
+        
+        # Pattern for specific price ranges
+        range_patterns = [
+            r'between\s*\$?(\d+(?:\.\d{2})?)\s*(?:and|to|-)\s*\$?(\d+(?:\.\d{2})?)',
+            r'\$?(\d+(?:\.\d{2})?)\s*(?:-|to)\s*\$?(\d+(?:\.\d{2})?)',
+            r'under\s*\$?(\d+(?:\.\d{2})?)',
+            r'less\s*than\s*\$?(\d+(?:\.\d{2})?)',
+            r'max(?:imum)?\s*\$?(\d+(?:\.\d{2})?)',
+            r'up\s*to\s*\$?(\d+(?:\.\d{2})?)'
+        ]
+        
+        for pattern in range_patterns:
+            matches = re.finditer(pattern, query, re.IGNORECASE)
+            for match in matches:
+                if len(match.groups()) == 2:
+                    price_ranges.append({
+                        "min": float(match.group(1)),
+                        "max": float(match.group(2))
+                    })
+                else:
+                    price_ranges.append({
+                        "min": None,
+                        "max": float(match.group(1))
+                    })
+        
+        return price_ranges
+
+    def _get_price_range(self, product: str, price_ranges: List[Dict]) -> Dict:
+        """Associate price range with product based on proximity"""
+        default_range = {"min": None, "max": None}
+        if not price_ranges:
+            return default_range
+        
+        # If only one price range, use it
+        if len(price_ranges) == 1:
+            return price_ranges[0]
+            
+        # TODO: Implement proximity-based matching
+        return default_range
+
+    def _extract_occasion(self, query: str) -> Optional[str]:
+        """Extract occasion/event from query"""
+        occasion_keywords = {
+            'wedding': ['wedding', 'ceremony', 'reception'],
+            'party': ['party', 'celebration', 'birthday'],
+            'work': ['work', 'office', 'business', 'professional'],
+            'casual': ['casual', 'everyday', 'daily'],
+            'formal': ['formal', 'gala', 'black tie']
+        }
+        
+        query_lower = query.lower()
+        for occasion, keywords in occasion_keywords.items():
+            if any(keyword in query_lower for keyword in keywords):
+                return occasion
+        
+        return None
+
+    def _extract_urgency(self, query: str) -> Optional[str]:
+        """Extract urgency indicators from query"""
+        urgency_patterns = [
+            (r'need.*(?:today|now|asap|immediately|urgent)', 'immediate'),
+            (r'need.*(?:this|next)\s+week', 'this_week'),
+            (r'need.*(?:this|next)\s+month', 'this_month'),
+            (r'by\s+(?:this|next)', 'deadline')
+        ]
+        
+        for pattern, urgency in urgency_patterns:
+            if re.search(pattern, query.lower()):
+                return urgency
+        
+        return None
+
+    def _extract_location(self, query: str) -> Optional[str]:
+        """Extract location context from query"""
+        location_keywords = {
+            'home': ['home', 'house', 'apartment'],
+            'office': ['office', 'workplace', 'work'],
+            'outdoor': ['outdoor', 'outside', 'garden'],
+            'gym': ['gym', 'fitness', 'workout']
+        }
+        
+        query_lower = query.lower()
+        for location, keywords in location_keywords.items():
+            if any(keyword in query_lower for keyword in keywords):
+                return location
+        
+        return None
+
+    def _extract_overall_budget(self, query: str) -> Optional[float]:
+        """Extract total budget for all items"""
+        budget_patterns = [
+            r'total\s+budget\s+(?:of\s+)?\$?(\d+(?:\.\d{2})?)',
+            r'budget\s+(?:of\s+)?\$?(\d+(?:\.\d{2})?)',
+            r'spend\s+(?:up\s+to\s+)?\$?(\d+(?:\.\d{2})?)\s+total',
+            r'altogether\s+(?:under|less\s+than)?\s+\$?(\d+(?:\.\d{2})?)'
+        ]
+        
+        for pattern in budget_patterns:
+            match = re.search(pattern, query, re.IGNORECASE)
+            if match:
+                try:
+                    return float(match.group(1))
+                except ValueError:
+                    continue
+        
+        return None
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class ConversationalDealFinder:
+    """Enhanced conversational deal finder with memory and follow-ups"""
+    
+    def __init__(self):
+        # self.llm = ChatOpenAI(model="gpt-4", temperature=0.3)
+        self.llm = ChatGroq(model="deepseek-r1-distill-llama-70b", temperature=0.3)
+
+        from .deal_providers import DealAggregator  # Delayed import
+        self.provider = DealAggregator()
+
+        self.provider.set_llm(self)
+
+        self.memory = ConversationBufferMemory(
+            memory_key="chat_history",
+            return_messages=True
+        )
+        self.user_preferences = {}  # Dict to store preferences by user_id
+        
+        # Query analysis prompt
+        self.query_analysis_prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are a shopping assistant that extracts search parameters from natural language queries. Return a JSON object with the following keys:
+            {
+                "product": "product name",
+                "price_range": {"min": null, "max": number or null},
+                "condition": "condition or null",
+                "requirements": []
+            }"""),
+            ("human", "{query}")
+        ])
+
+        
+        self.description_prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are an empathetic and enthusiastic shopping assistant who truly understands what makes each product special and how it can improve people's lives. Your goal is to connect with users on a personal level while helping them find perfect products.
+
+            When describing products, imagine you're having a warm, friendly conversation with the user. Consider their needs, emotions, and daily life experiences. Create descriptions that:
+            
+            1. Show genuine enthusiasm about features that matter most to the user
+            2. Paint vivid pictures of how the product could fit into their life
+            3. Acknowledge their specific needs based on their search query
+            4. Provide honest value assessment in a caring way
+            
+            Format your response with these engaging sections:
+            [Overview]: Share the most exciting features with genuine enthusiasm (1 compelling sentence)
+            [Best For]: Paint a relatable picture of ideal usage scenarios (1-2 warm, descriptive sentences)
+            [Value]: Give an honest, friendly take on the price-to-value ratio (1 conversational sentence)
+            [Recommendation]: Offer heartfelt, personalized advice based on their search (1 caring, tailored suggestion)
+            
+            Guidelines for tone:
+            - Be conversational and warm, like a knowledgeable friend
+            - Use "you" and "your" to make it personal
+            - Share authentic enthusiasm where deserved
+            - Acknowledge potential concerns empathetically
+            - Keep it honest and genuine, never overly sales-y
+            
+            Remember: Every user has a unique story and needs. Connect their story to the product's benefits."""),
+            
+            ("human", """User Query: {query}
+            Product Details:
+            - Name: {title}
+            - Price: ${price}
+            - Condition: {condition}
+            - Retailer: {retailer}""")
+        ])
+                    
+        # Comparison prompt
+        self.comparison_prompt = ChatPromptTemplate.from_messages([
+            ("system", """
+            You are a shopping expert helping users compare products. Consider:
+            1. Price differences and value for money
+            2. Condition and seller ratings
+            3. Features and specifications
+            4. User's previous preferences
+            
+            Provide a natural, conversational comparison.
+            """),
+            ("human", """
+            Previous preferences: {preferences}
+            Products to compare: {products}
+            
+            Please compare these options and suggest the best choice.
+            """)
         ])
         
-        # Initialize LLM with temperature setting for more consistent outputs
-        llm = ChatOpenAI(
-            model="gpt-4",
-            temperature=0.3,  # Lower temperature for more consistent formatting
-            max_tokens=4000
-        )
-        
-        # Create chain with retry logic
-        llm_chain = LLMChain(llm=llm, prompt=prompt)
-        
-        # Generate response with improved error handling
-        try:
-            ai_response = llm_chain.run(
-                query=query_text,
-                regular_results=json.dumps(all_results["regular"][:5]),  # Limit to top 5 most relevant
-                coupon_results=json.dumps(all_results["coupons"][:3]),
-                cashback_results=json.dumps(all_results["cashback"][:3])
-            )
+        # Follow-up prompt
+        self.followup_prompt = ChatPromptTemplate.from_messages([
+            ("system", """
+            Generate relevant follow-up questions based on the user's query and the search results.
+            Consider asking about:
+            1. Specific features they need
+            2. Preferred price range adjustments
+            3. Condition preferences
+            4. Alternative product suggestions
             
-            # Validate response format
-            if not any(marker in ai_response for marker in ['**Base Price Details**', '**Additional Savings**']):
-                raise ValueError("AI response does not match expected format")
+            Keep questions natural and contextual.
+            """),
+            ("human", """
+            Original query: {query}
+            Search results: {results}
+            User preferences: {preferences}
+            
+            Generate 1-2 relevant follow-up questions.
+            """)
+        ])
+
+
+   
+
+
+    # def generate_product_description(self, product: ProductDeal, query: str) -> str:
+    #     """Generate AI-powered product description"""
+    #     try:
+    #         chain = LLMChain(llm=self.llm, prompt=self.description_prompt)
+    #         response = chain.invoke({
+    #             "query": query,
+    #             "title": product.title,
+    #             "price": product.price,
+    #             "condition": product.condition or "Not specified",
+    #             "retailer": product.retailer,
+    #             "original_desc": product.description
+    #         })
+    #         return response['text']
+    #     except Exception as e:
+    #         logger.error(f"Error generating description: {str(e)}")
+    #         return product.description  # F
+
+
+
+    def generate_product_description(self, product: ProductDeal, query: str) -> str:
+        """Generate AI-powered product description with improved error handling"""
+        try:
+            # Validate input
+            if not product or not query:
+                logger.warning("Missing product or query for description generation")
+                return product.description or "No description available"
+
+            # Create chain with explicit error handling
+            chain = LLMChain(llm=self.llm, prompt=self.description_prompt)
+            
+            # Prepare input, ensuring no None values
+            input_data = {
+                "query": query or "",
+                "title": product.title or "Unnamed Product",
+                "price": product.price or 0,
+                "condition": product.condition or "Not specified",
+                "retailer": product.retailer or "Unknown",
+                "original_desc": product.description or ""
+            }
+
+            # Invoke with timeout and explicit error capture
+            response = chain.invoke(input_data)
+            
+            # Validate response
+            if not response or 'text' not in response:
+                logger.error("Invalid response from LLM")
+                return product.description
+
+            return response['text']
+
+        except Exception as e:
+            # Comprehensive error logging
+            logger.error(f"Detailed description generation error: {str(e)}")
+            logger.error(f"Error Type: {type(e)}")
+            
+            # Optional: Log full traceback
+            import traceback
+            logger.error(traceback.format_exc())
+            
+            # Fallback to original description
+            return product.description or "Unable to generate description"
+
+    def get_user_preferences(self, user_id: str) -> UserPreference:
+        """Get or create user preferences"""
+        if user_id not in self.user_preferences:
+            self.user_preferences[user_id] = UserPreference()
+        return self.user_preferences[user_id]
+
+    def update_user_preferences(self, user_id: str, query_result: dict):
+        """Update user preferences based on their queries"""
+        prefs = self.get_user_preferences(user_id)
+        
+        if query_result.get('price_range', {}).get('max'):
+            prefs.max_price = query_result['price_range']['max']
+        
+        if query_result.get('condition'):
+            prefs.preferred_condition = query_result['condition']
+
+ 
+    
+    
+    
+
+
+    # def _parse_natural_language_query(self, query: str) -> Dict:
+    #     """Universal search parameter extraction"""
+    #     try:
+    #         extractor = UniversalSearchExtractor()
+    #         search_params = extractor.extract_search_parameters(query)
+            
+    #         # Generate search terms
+    #         search_terms = " ".join(filter(None, [
+    #             search_params.get('product_type', ''),
+    #             *search_params.get('key_attributes', []),
+    #             search_params.get('color', ''),
+    #             search_params.get('brand', '')
+    #         ]))
+            
+    #         return {
+    #             "product": search_params.get('product_type', 'item'),
+    #             "price_range": search_params.get('price_range', 
+    #                 {"min": None, "max": None}),
+    #             "search_terms": search_terms
+    #         }
+    #     except Exception as e:
+    #         logger.error(f"Universal search extraction error: {str(e)}")
+    #         return {
+    #             "product": "item",
+    #             "price_range": {"min": None, "max": None},
+    #             "search_terms": query
+    #         }
+
+
+    def _parse_natural_language_query(self, query: str) -> Dict:
+        """Universal search parameter extraction"""
+        logger.info(f"Starting natural language query parsing: {query}")
+        try:
+            extractor = UniversalSearchExtractor()
+            search_params = extractor.extract_search_parameters(query)
+            logger.info(f"Extracted search parameters: {search_params}")
+            
+            return {
+                "products": search_params.get('products', []),
+                "shared_context": search_params.get('shared_context', {})
+            }
+        except Exception as e:
+            logger.error(f"Error in natural language parsing: {str(e)}")
+            logger.error(f"Full error details: {traceback.format_exc()}")
+            return {
+                "products": [{
+                    "product_type": "item",
+                    "price_range": {"min": None, "max": None},
+                    "search_keywords": query.split()
+                }],
+                "shared_context": {}
+            }
+
+
+
+    def generate_comparison(self, products: List[ProductDeal], user_id: str) -> str:
+        """Generate a comparison of products"""
+        if len(products) < 2:
+            return ""
+            
+        prefs = self.get_user_preferences(user_id)
+        
+        # Format the products for comparison
+        formatted_products = []
+        for i, p in enumerate(products):
+            condition = "Not specified"
+            if "Condition:" in p.description:
+                condition = p.description.split("Condition:")[-1].split("\n")[0]
                 
-            return ai_response
+            product_str = (
+                f"Product {i+1}:\n"
+                f"Title: {p.title}\n"
+                f"Price: ${p.price}\n"
+                f"Condition: {condition}\n"
+            )
+            formatted_products.append(product_str)
+        
+        formatted_products = "\n".join(formatted_products)
+        
+        # Create the LLMChain
+        chain = LLMChain(llm=self.llm, prompt=self.comparison_prompt)
+        
+        # Pass a dictionary with the required keys
+        return chain.invoke({
+            "preferences": str(prefs),  # Ensure this matches the prompt placeholder
+            "products": formatted_products  # Ensure this matches the prompt placeholder
+        })
+
+    def generate_followup_questions(self, query: str, results: List[ProductDeal], user_id: str) -> str:
+        """Generate contextual follow-up questions"""
+        if not results:
+            return "No products found. Would you like to adjust your search criteria?"
+
+        prefs = self.get_user_preferences(user_id)
+        formatted_results = "\n".join([
+            f"- {p.title} (${p.price})"
+            for p in results[:3]  # Use top 3 results for context
+        ])
+        
+        chain = LLMChain(llm=self.llm, prompt=self.followup_prompt)
+        return chain.invoke({
+            "query": query,
+            "results": formatted_results,
+            "preferences": str(prefs)
+        })
+
+  
+    # def find_deals(self, natural_query: str, user_id: str) -> Dict:
+    #     """Process natural language query and return structured response"""
+    #     try:
+    #         # Parse the query using NLP
+    #         query_result = self._parse_natural_language_query(natural_query)
+    #         logger.debug(f"Parsed Query Result: {query_result}")
+            
+    #         # Update user preferences
+    #         self.update_user_preferences(user_id, query_result)
+            
+    #         # Get deals using the optimized search terms
+    #         deals = self.provider.search_deals(
+    #             query=query_result["search_terms"],  # Use the processed search terms
+    #             min_price=query_result["price_range"].get("min"),
+    #             max_price=query_result["price_range"].get("max"),
+    #             max_results=5
+    #         )
+            
+    #         # Rest of your code remains the same...
+    #         all_deals = deals['ebay'] + deals['amazon'] + deals['walmart']
+    #         comparison = self.generate_comparison(all_deals, user_id) if len(all_deals) > 1 else ""
+    #         followup = self.generate_followup_questions(natural_query, all_deals, user_id)
+            
+    #         return {
+    #             "deals": deals,
+    #             "comparison": comparison,
+    #             "followup_questions": followup,
+    #             "user_preferences": self.get_user_preferences(user_id)
+    #         }
+    #     except Exception as e:
+    #         logger.error(f"Error in find_deals: {str(e)}")
+    #         return {
+    #             "deals": {'ebay': [], 'amazon': [], 'walmart': []},
+    #             "comparison": "",
+    #             "followup_questions": "An error occurred while searching for deals.",
+    #             "user_preferences": self.get_user_preferences(user_id)
+    #         }
+
+
+    def find_deals(self, natural_query: str, user_id: str) -> Dict:
+        """Process natural language query and handle multiple products while maintaining API compatibility"""
+        logger.info(f"Starting deal search for query: {natural_query}")
+        
+        try:
+            # Parse the query for multiple products
+            query_result = self._parse_natural_language_query(natural_query)
+            logger.info(f"Parsed query result: {query_result}")
+            
+            # Initialize combined results
+            combined_deals = {
+                'ebay': [],
+                'amazon': [],
+                'walmart': []
+            }
+            
+            all_product_results = []
+            
+            # Search for each product
+            products = query_result.get('products', [])
+            logger.info(f"Found {len(products)} products to search for")
+            
+            for product in products:
+                logger.info(f"Processing product: {product}")
+                
+                # Construct search terms
+                search_terms = " ".join(product['search_keywords'])
+                logger.info(f"Search terms for product: {search_terms}")
+                
+                # Get deals for this specific product
+                product_deals = self.provider.search_deals(
+                    query=search_terms,
+                    min_price=product['price_range'].get('min'),
+                    max_price=product['price_range'].get('max'),
+                    max_results=3
+                )
+                logger.info(f"Found deals for {product['product_type']}: {product_deals}")
+                
+                # Combine deals into the compatible structure
+                for retailer in combined_deals.keys():
+                    retailer_deals = product_deals.get(retailer, [])
+                    logger.info(f"Adding {len(retailer_deals)} deals from {retailer}")
+                    combined_deals[retailer].extend(retailer_deals)
+                
+                all_product_results.append({
+                    'product_type': product['product_type'],
+                    'deals': product_deals,
+                    'attributes': product.get('key_attributes', []),
+                    'context': product.get('shared_context', {})
+                })
+            
+            # Generate comparison for all deals combined
+            all_deals = []
+            for retailer_deals in combined_deals.values():
+                all_deals.extend(retailer_deals)
+            
+            logger.info(f"Total deals found across all products: {len(all_deals)}")
+            
+            comparison = self.generate_comparison(all_deals, user_id) if len(all_deals) > 1 else ""
+            followup = self.generate_followup_questions(natural_query, all_deals, user_id)
+            
+            result = {
+                "deals": combined_deals,
+                "comparison": comparison,
+                "followup_questions": followup,
+                "user_preferences": self.get_user_preferences(user_id),
+                "shared_context": query_result.get('shared_context', {}),
+                "product_results": all_product_results
+            }
+            
+            logger.info(f"Returning final result structure with {sum(len(deals) for deals in combined_deals.values())} total deals")
+            return result
             
         except Exception as e:
-            logger.exception(f"Error in LLM chain: {str(e)}")
-            raise
-            
-    except Exception as e:
-        raise Exception(f"Error processing query: {str(e)}")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# def get_deals(query_text):
-#     """Main function to get deals"""
-#     try:
-#         # Get search results
-#         all_results = perform_searches(query_text)
-        
-#         # Generate response using LLMChain
-#         ai_response = llm_chain.run(
-#             query=query_text,
-#             regular_results=all_results["regular"],
-#             coupon_results=all_results["coupons"],
-#             cashback_results=all_results["cashback"]
-#         )
-        
-#         return ai_response
-#     except Exception as e:
-#         raise Exception(f"Error processing query: {str(e)}")
-
-
-
-
-
-
-
-
- 
-
-
-
-
-
-# tool = TavilySearchResults(
-#     max_results=10,
-#     search_depth="advanced",
-#     include_answer=True,
-#     include_raw_content=True,
-#     include_images=True,
-#     # include_domains=[
-#     #     "ebay.com", "walmart.com", "bestbuy.com", "newegg.com", "asos.com", "macys.com", "hm.com", "nordstrom.com", "amazon.com"
-#     # ]
-#     # exclude_domains=[...],
-#     # name="...",            # overwrite default tool name
-#     # description="...",     # overwrite default tool description
-#     # args_schema=...,       # overwrite default args_schema: BaseModel
-# )
-
-
-# llm = ChatOpenAI(model="gpt-4o")
-
-
- 
-
-
-
-
- 
-
-
-
-# prompt = ChatPromptTemplate(
-#     [
-#         ("system", """You are a helpful assistant whose job is to search the web and provide relevant deals and discounts based on the user's message and price range. All products must be within the specified price range. Do not provide products that are significantly above the user's price range.
-
-# IMPORTANT GUIDELINES:
-# 1. ONLY use the links and information provided by the TavilySearchResults tool. DO NOT generate or invent any links or product information.
-# 2. ALWAYS provide links for all products. This is critically important.
-# 3. Conduct a thorough search to find available products. Take your time to verify search results.
-# 4. DO NOT forge any links or return links to unavailable products or 404 pages.
-# 5. Verify that images and descriptions match the user's request.
-# 6. Ensure all products come from verified and reputable websites only.
-# 7. Prioritize deals from top e-commerce websites based on the product category.
-# 8. Look specifically for discounts on deals. Compare original prices to discounted prices when available.
-# 9. Cross-reference prices across different retailers to ensure you're presenting the best deal.
-# 10. If a product is on sale, clearly state the original price and the discount percentage.
-# 11. If you can't find relevant information from the search results, say so.
-
-# Preferred websites by category:
-# 1. General Products: eBay, Walmart, Best Buy, Amazon, Target, Costco
-# 2. Fashion and Clothing: Zara, H&M, ASOS, Macy's, Nordstrom
-# 3. Electronics: Amazon, Best Buy, Newegg, Walmart
-# 4. Home and Garden: Wayfair, Overstock, Home Depot
-# 5. Groceries and Household: Walmart, Amazon, Target
-
-# DO NOT PROVIDE LINKS FROM BLOGS, AFFILIATE MARKETERS, OR UNVERIFIED SITES.
-
-# Format your response using MLA style and Markdown formatting as follows:
-
-# # Deals Found
-
-# For each product, provide:
-
-# 1. **Product Name**
-# 2. **Current Price**: $XX.XX
-# 3. **Original Price** (if available): $XX.XX
-# 4. **Discount**: XX% off (if applicable)
-# 5. **Description**: Brief description of the product, including key features
-# 6. **Retailer**: Name of the retailer
-# 7. **Link**: [Product Name](exact URL to product page)
-# 8. **Deal Expiration** (if available): Date or "Limited Time Offer"
-
-# Example:
-
-# # Deals Found
-
-# 1. **Sony WH-1000XM4 Wireless Noise-Canceling Headphones**
-#    - **Current Price**: $278.00
-#    - **Original Price**: $349.99
-#    - **Discount**: 21% off
-#    - **Description**: Industry-leading noise cancellation with Dual Noise Sensor technology, up to 30-hour battery life
-#    - **Retailer**: Amazon
-#    - **Link**: [Sony WH-1000XM4 Headphones](https://www.amazon.com/Sony-WH-1000XM4-Canceling-Headphones-phone-call/dp/B0863TXGM3)
-#    - **Deal Expiration**: Limited Time Offer
-
-# 2. **[Next Product]**
-#    ...
-
-# If you can't find suitable products within the price range or from the preferred websites, clearly state this using the same formatting:
-
-# # No Suitable Deals Found
-
-# Unfortunately, I couldn't find any suitable products within the specified price range from the preferred websites. [Additional explanation if necessary]
-
-# Remember to maintain this formatting for all responses."""),
-#         ("human", "{user_input}"),
-#         ("placeholder", "{messages}"),
-#     ]
-# )
-
-
-
-
-
-
-
-
-
- 
-
-
-
-
-
-# llm_with_tools = llm.bind_tools([tool])
-# llm_chain = prompt | llm_with_tools
-
-
-
-# @chain
-# def tool_chain(user_input: str, config: RunnableConfig):
-#     input_ = {"user_input": user_input}
-#     ai_msg = llm_chain.invoke(input_, config=config)
-#     tool_msgs = tool.batch(ai_msg.tool_calls, config=config)
-#     return llm_chain.invoke({**input_, "messages": [ai_msg, *tool_msgs]}, config=config)
+            logger.error(f"Error in find_deals: {str(e)}")
+            logger.error(f"Full error details: {traceback.format_exc()}")
+            return {
+                "deals": {
+                    'ebay': [],
+                    'amazon': [],
+                    'walmart': []
+                },
+                "comparison": "",
+                "followup_questions": "An error occurred while searching for deals.",
+                "user_preferences": self.get_user_preferences(user_id),
+                "shared_context": {},
+                "product_results": []
+            }

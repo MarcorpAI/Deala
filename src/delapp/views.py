@@ -18,9 +18,9 @@ from django.core.exceptions import ObjectDoesNotExist
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.conf import settings
 import json
-from rest_framework.throttling import UserRateThrottle
+from django.http import StreamingHttpResponse
 import requests
-from langchain.schema import HumanMessage
+
 import re
 import base64
 from .utils import sanitize_input, validate_query
@@ -29,7 +29,6 @@ import traceback
 from django.views.decorators.http import require_POST
 from langchain.schema import AIMessage
 # from .llm_engine import tool_chain
-from langchain_openai import ChatOpenAI
 from .lemon_squeezy import create_checkout, verify_webhook
 import uuid
 from django.utils.crypto import get_random_string
@@ -45,7 +44,7 @@ from .serializers import UserSerializer, QuerySerializer
 from django.http import JsonResponse
 
 from django.views.decorators.csrf import csrf_exempt
-from .llm_engine import get_deals
+from .llm_engine import ConversationalDealFinder
 from dotenv import load_dotenv
 from django_ratelimit.decorators import ratelimit
 from django.utils.timezone import now, timedelta
@@ -57,9 +56,11 @@ from langchain.prompts import ChatPromptTemplate
 from langchain.chat_models import ChatOpenAI
 from django.utils import timezone
 from asgiref.sync import sync_to_async
-from .dataforseo_tool import DataForSEOTool
 from asgiref.sync import async_to_sync
 import asyncio
+from rest_framework.permissions import AllowAny
+from rest_framework.decorators import permission_classes
+
 
 
 
@@ -89,7 +90,50 @@ def generate_cache_key(user_id, query):
 
 
 
+
+
+deal_finder = ConversationalDealFinder()
+
+
+
 @api_view(['POST'])
+@permission_classes([AllowAny])
+def product_description_view(request):
+    """Generate AI descriptions for products"""
+    try:
+        product_data = request.data.get('product')
+        query = request.data.get('query')
+        
+        if not product_data or not query:
+            return Response({
+                "error": "Both product data and query are required"
+            }, status=status.HTTP_400_BAD_REQUEST)
+            
+
+        enhanced_description = deal_finder.generate_product_description(product_data, query)
+        
+        return Response({
+            "description": enhanced_description
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Error generating product description: {str(e)}")
+        return Response({
+            "error": "Failed to generate product description"
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
+
+
+
+
+
+
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
 def user_query_api_view(request):
     logger.info(f"Received request data: {request.data}")
     
@@ -97,30 +141,97 @@ def user_query_api_view(request):
     
     if serializer.is_valid():
         query_text = serializer.validated_data['query']
+        user_id = str(request.user.id) if request.user.is_authenticated else None
         
         if not query_text.strip():
             return Response({"error": "Query cannot be empty."}, status=status.HTTP_400_BAD_REQUEST)
         
         try:
-            ai_response = get_deals(query_text)
+            # Get deals and conversation context
+            result = deal_finder.find_deals(query_text, user_id)
             
-            logger.debug(f"AI Response: {ai_response}")
-            print("AI Response:", ai_response)
+            # Parse deals into the expected format
+            structured_deals = []
             
-            deals = parse_deals(ai_response)
+            # Process deals from each retailer
+            for retailer, deals in result['deals'].items():
+                if not isinstance(deals, list):
+                    logger.warning(f"Unexpected deals format for {retailer}: {deals}")
+                    continue
+                    
+                for deal in deals:
+                    try:
+                        # Calculate savings only if both prices are available and valid
+                        savings_amount = None
+                        savings_percentage = None
+                        if getattr(deal, 'original_price', None) and getattr(deal, 'price', None):
+                            try:
+                                original_price = float(deal.original_price)
+                                current_price = float(deal.price)
+                                if original_price > current_price:
+                                    savings_amount = str(original_price - current_price)
+                                    savings_percentage = str((1 - current_price/original_price) * 100)
+                            except (ValueError, TypeError) as e:
+                                logger.warning(f"Error calculating savings: {str(e)}")
+
+                        enhanced_description = deal_finder.generate_product_description(deal, query_text)
+
+                        structured_deal = {
+                            'name': getattr(deal, 'title', 'No title available'),
+                            'currentPrice': str(getattr(deal, 'price', 'N/A')),
+                            'originalPrice': str(deal.original_price) if getattr(deal, 'original_price', None) else None,
+                            # 'description': getattr(deal, 'description', 'No description available'),
+                            'description': enhanced_description,
+                            'rating': getattr(deal, 'rating', None),
+                            'productLink': getattr(deal, 'url', '#'),
+                            'image_url': getattr(deal, 'image_url', None),
+                            'retailer': retailer.capitalize(),
+                            'savings': {
+                                'amount': savings_amount,
+                                'percentage': savings_percentage
+                            },
+                            'condition': getattr(deal, 'condition', None),
+                            # 'product_star_rating': getattr(deal, 'product_star_rating', None),
+                            'shipping_info': getattr(deal, 'shipping_info', None),
+                            'discount': getattr(deal, 'discount', None),
+                            'coupon': getattr(deal, 'coupon', None),
+                            'trending': getattr(deal, 'trending', False),
+                            'sold_count': getattr(deal, 'sold_count', None),
+                            'watchers': getattr(deal, 'watchers', None),
+                            'return_policy': getattr(deal, 'return_policy', None),
+                            'location': getattr(deal, 'location', None)
+                        }
+                        structured_deals.append(structured_deal)
+                    except Exception as e:
+                        logger.error(f"Error processing deal from {retailer}: {str(e)}")
+                        continue
             
             # Save the query with the associated user
             user_query = serializer.save()
             
+            # Get user preferences safely
+            user_prefs = result.get('user_preferences', {})
+            preferences = {
+                "preferred_condition": getattr(user_prefs, 'preferred_condition', None),
+                "max_price": getattr(user_prefs, 'max_price', None),
+                "min_rating": getattr(user_prefs, 'min_rating', None),
+                "favorite_categories": getattr(user_prefs, 'favorite_categories', None)
+            }
+            
             return Response({
                 "query": query_text,
-                "ai_response": ai_response,
-                "deals": deals
+                "deals": structured_deals,
+                "comparison": result.get('comparison', ''),
+                "followup_questions": result.get('followup_questions', ''),
+                "user_preferences": preferences
             }, status=status.HTTP_200_OK)
         
         except Exception as e:
             logger.exception(f"Error processing query: {str(e)}")
-            return Response({"error": "An error occurred while processing your query."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({
+                "error": "An error occurred while processing your query.",
+                "details": str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     else:
         logger.warning(f"Invalid serializer data: {serializer.errors}")
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -128,6 +239,10 @@ def user_query_api_view(request):
 
 
 
+
+
+
+ 
 
 
 def parse_deals(ai_content):
@@ -425,39 +540,6 @@ class CreateUserView(generics.CreateAPIView):
                 "error": "Registration failed. Please try again later."
             })
 
-
-
-
-# class CustomTokenObtainPairView(TokenObtainPairView):
-#     def post(self, request, *args, **kwargs):
-#         try:
-#             # Get the response from the parent class (this will contain the tokens)
-#             response = super().post(request, *args, **kwargs)
-            
-#             # If login was successful, retrieve the user instance from the serializer
-#             if response.status_code == 200:
-#                 # Use `serializer.validated_data.get('user')` to get the user after validation
-#                 serializer = self.get_serializer(data=request.data)
-#                 serializer.is_valid(raise_exception=True)
-#                 user = serializer.user  # Access user through serializer
-
-#                 # Log successful login
-#                 logger.info(f"Successful login for user: {user.email} from IP: {request.META.get('REMOTE_ADDR')}")
-                
-#                 # Add user information to the response data if needed
-#                 response.data.update({
-#                     'email': user.email,
-#                     'is_active': user.is_active,
-#                     'email_verified': user.email_verified
-#                 })
-                
-#             return response
-
-#         except Exception as e:
-#             logger.error(f"Login error: {str(e)}", exc_info=True)
-#             return Response({
-#                 'error': 'Login failed. Please check your credentials and try again.'
-#             }, status=status.HTTP_400_BAD_REQUEST)
 
 
 

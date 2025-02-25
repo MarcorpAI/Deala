@@ -17,7 +17,7 @@ SECRET_KEY = os.getenv('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 
-DEBUG = 'RENDER' not in os.environ
+DEBUG = True
 
 
 ALLOWED_HOSTS = [
@@ -47,6 +47,8 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_framework",
     "delapp",
+    "products",
+    "cart",
     "corsheaders",
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
@@ -268,13 +270,32 @@ WSGI_APPLICATION = "dela.wsgi.application"
 # }
 
 
-
 DATABASES = {
-    'default': dj_database_url.config(
-        default=DATABASE_URL,
-        conn_max_age=600,
-    )
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'mydatabase',        # Replace with your database name
+        'USER': 'myuser',            # Replace with your database username
+        'PASSWORD': 'mypassword',    # Replace with your database password
+        'HOST': 'localhost',         # Use 'localhost' for local database
+        'PORT': '5432',              # Default PostgreSQL port
+    }
 }
+
+
+
+
+
+
+
+
+
+# DATABASES = {
+#     'default': dj_database_url.config(
+#         default=DATABASE_URL,
+#         conn_max_age=600,
+#     )
+# }
+
 
 
 # Password validation
@@ -370,6 +391,7 @@ AUTH_USER_MODEL = 'delapp.CustomUser'
 # In your settings.py file
 
 
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
@@ -419,5 +441,5 @@ EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD")
 DEFAULT_FROM_EMAIL = os.environ.get("EMAIL_HOST_USER")  # Add this
 
 
-SECURE_SSL_REDIRECT = True  # Render provides SSL
-SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+SECURE_SSL_REDIRECT = False # Render provides SSL
+# SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')

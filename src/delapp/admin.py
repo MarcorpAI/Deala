@@ -2,11 +2,17 @@ from django.contrib import admin
 from .models import UserQuery, CustomUser, UserSubscription
 from django.contrib.auth.admin import UserAdmin
 from django.utils.translation import gettext_lazy as _
-
+from products.models import StoredProduct
+from cart.models import Cart
 # Register your models here.
 
 admin.site.register(UserQuery)
 admin.site.register(UserSubscription)
+admin.site.register(StoredProduct)
+admin.site.register(Cart)
+
+
+
 # admin.site.register(Waitlist)
 
 
