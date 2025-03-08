@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 import os
 load_dotenv()
 
-app_id = "Markkaav-Deala-PRD-066ca4013-7b5eb942"
+app_id = ""
 config = {
     'domain': 'svcs.ebay.com',  # Production endpoint
     'siteid': 'EBAY-US',
