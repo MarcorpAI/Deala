@@ -48,9 +48,9 @@ class EbayProvider(BaseProvider):
     
     def __init__(self):
         super().__init__()
-        self.app_id = "Markkaav-Deala-PRD-066ca4013-7b5eb942"
-        self.cert_id = "PRD-66ca4013b5af-16c8-4ee4-b038-02b6"
-        self.dev_id =  "9418f37d-8999-453c-b918-791a5598aa6c"
+        self.app_id = ""
+        self.cert_id = ""
+        self.dev_id =  ""
 
         print("Loaded EBAY_APP_ID:", self.app_id)
         print("Loaded EBAY_CERT_ID:", self.cert_id)
@@ -261,7 +261,7 @@ class WalmartProvider(BaseProvider):
     def __init__(self):
         super().__init__()
         self.api_key = os.getenv('WALMART_API_KEY')
-        self.base_url = "https://walmart-api4.p.rapidapi.com/search"
+        self.base_url = ""
 
         
         if not self.api_key:
@@ -430,7 +430,7 @@ class AmazonProvider(BaseProvider):
     def __init__(self):
         super().__init__()
         self.api_key = os.getenv('AMAZON_API_KEY')
-        self.base_url =  "https://real-time-amazon-data.p.rapidapi.com/search"
+        self.base_url =  ""
         
         if not self.api_key:
             raise ValueError("Missing RapidAPI key")
@@ -491,7 +491,7 @@ class AmazonProvider(BaseProvider):
         try:
             headers = {
                 'X-RapidAPI-Key': self.api_key,
-                'X-RapidAPI-Host': 'real-time-amazon-data.p.rapidapi.com'
+                'X-RapidAPI-Host': ''
             }
             
             params = {
