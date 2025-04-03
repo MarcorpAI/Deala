@@ -559,6 +559,13 @@ class AmazonProvider(BaseProvider):
             return []
 
 
+class EtsyProvider(BaseProvider):
+    def search_products(self, query: str, min_price: Optional[float] = None, 
+                        max_price: Optional[float] = None, condition: Optional[str] = None,
+                        max_results: int = 20) -> List[ProductDeal]:
+        # Implement Etsy product search logic here
+        pass
+
 
 
 

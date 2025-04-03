@@ -104,6 +104,57 @@ class UserQuery(models.Model):
 
 
 
+class Conversation(models.Model):
+    """Model to represent a shopping conversation session"""
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="conversations", null=True, blank=True)
+    title = models.CharField(max_length=255, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    active = models.BooleanField(default=True)
+    
+    def __str__(self):
+        return f"Conversation {self.id} - {self.title or 'Untitled'}"
+    
+    class Meta:
+        ordering = ['-updated_at']
+
+
+
+
+
+
+class ConversationMessage(models.Model):
+    """Model to store individual messages in a conversation"""
+    ROLE_CHOICES = (
+        ('user', 'User'),
+        ('assistant', 'Assistant'),
+    )
+    
+    conversation = models.ForeignKey(Conversation, on_delete=models.CASCADE, related_name="messages")
+    role = models.CharField(max_length=10, choices=ROLE_CHOICES)
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    # Store search results for assistant messages
+    search_results = models.JSONField(null=True, blank=True)
+    
+    # If this message contains product recommendations
+    has_products = models.BooleanField(default=False)
+    
+    # Store query understanding for the assistant's response
+    query_understanding = models.TextField(null=True, blank=True)
+    
+    def __str__(self):
+        return f"{self.role}: {self.content[:50]}..."
+    
+    class Meta:
+        ordering = ['created_at']
+
+
+
+
+
+
 class UserSubscription(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)
     is_active = models.BooleanField(default=False)

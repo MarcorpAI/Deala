@@ -1,0 +1,95 @@
+def find_deals(self, natural_query: str, user_id: str, conversation_id: str = None) -> Dict:
+    #     """Process natural language query with conversation context"""
+    #     try:
+    #         context = ""
+    #         previous_deals = []
+            
+    #         if conversation_id:
+    #             from .models import ConversationMessage
+    #             messages = ConversationMessage.objects.filter(
+    #                 conversation_id=conversation_id
+    #             ).order_by('created_at')[:10]
+                
+    #             context_parts = []
+    #             for msg in messages:
+    #                 role = "User" if msg.role == 'user' else "Assistant"
+    #                 context_parts.append(f"{role}: {msg.content}")
+                
+    #             if context_parts:
+    #                 context = "\n".join(context_parts)
+                
+    #             previous_deals = self._get_previous_deals_from_context(conversation_id)
+            
+    #         intent_data = self.detect_intent(natural_query, context)
+            
+    #         result = {
+    #             "deals": {'searchapi': []},
+    #             "comparison": "",
+    #             "followup_questions": "",
+    #             "user_preferences": self.get_user_preferences(user_id),
+    #             "shared_context": {},
+    #             "query_understanding": ""
+    #         }
+            
+    #         if intent_data['intent'] == 'new_search' or (intent_data['intent'] == 'filter' and intent_data['requires_search']):
+    #             query_result = self._parse_natural_language_query(f"{context}\nUser: {natural_query}")
+                
+    #             if query_result.get('products'):
+    #                 loop = asyncio.new_event_loop()
+    #                 asyncio.set_event_loop(loop)
+    #                 try:
+    #                     search_results = loop.run_until_complete(self._search_products_parallel(query_result['products']))
+    #                     result['deals']['searchapi'] = search_results[0].get('searchapi', [])
+    #                 finally:
+    #                     loop.close()
+                
+    #             result['comparison'] = self.generate_comparison(result['deals']['searchapi'], user_id) if len(result['deals']['searchapi']) > 1 else ""
+    #             result['query_understanding'] = f"Searching for {query_result.get('products', [{}])[0].get('product_type', 'products')}"
+            
+    #         elif intent_data['intent'] in ['filter', 'comparison', 'more_info'] and previous_deals:
+    #             if intent_data['intent'] == 'filter':
+    #                 price_matches = re.findall(r'(?:under|below|less than)\s+\$?(\d+)', natural_query.lower())
+    #                 if price_matches:
+    #                     price_limit = float(price_matches[0])
+    #                     result['deals']['searchapi'] = [p for p in previous_deals if p.price and p.price <= price_limit]
+    #                 else:
+    #                     result['deals']['searchapi'] = previous_deals
+                    
+    #                 result['comparison'] = self.generate_comparison(result['deals']['searchapi'], user_id) if len(result['deals']['searchapi']) > 1 else "Here's the matching product."
+    #                 result['query_understanding'] = f"Filtered results based on: {natural_query}"
+                
+    #             elif intent_data['intent'] == 'comparison':
+    #                 result['deals']['searchapi'] = previous_deals
+    #                 result['comparison'] = self.generate_comparison(previous_deals, user_id)
+    #                 result['query_understanding'] = "Comparing previously shown products"
+                
+    #             elif intent_data['intent'] == 'more_info':
+    #                 detailed_descriptions = []
+    #                 for deal in previous_deals:
+    #                     detailed_descriptions.append(self.generate_product_description(deal, natural_query))
+    #                 result['comparison'] = "\n\n".join(detailed_descriptions)
+    #                 result['deals']['searchapi'] = previous_deals
+    #                 result['query_understanding'] = "Providing more details about previously shown products"
+            
+    #         result['followup_questions'] = self.generate_followup_questions(
+    #             natural_query, 
+    #             result['deals']['searchapi'], 
+    #             user_id
+    #         )
+            
+    #         return result
+            
+    #     except Exception as e:
+    #         logger.error(f"Error in find_deals: {str(e)}")
+    #         return {
+    #             "deals": {'searchapi': []},
+    #             "comparison": "An error occurred while processing your request.",
+    #             "followup_questions": "Would you like to try again?",
+    #             "user_preferences": self.get_user_preferences(user_id),
+    #             "shared_context": {},
+    #             "query_understanding": ""
+    #         }
+
+
+
+    
