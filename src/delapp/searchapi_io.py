@@ -20,7 +20,7 @@ import traceback
 load_dotenv(find_dotenv(), override=True)
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -61,6 +61,30 @@ class BaseProvider:
         if time_since_last < self.min_request_interval:
             time.sleep(self.min_request_interval - time_since_last)
         self.last_request_time = time.time()
+
+def _clean_price_string(price_str: str) -> Optional[float]:
+    """Clean and parse a price string into a float value.
+    Handles various formats like 'Usually XX', '$XX.XX', etc.
+    Returns None if the price cannot be parsed."""
+    if not price_str:
+        return None
+        
+    # Remove common prefixes
+    price_str = price_str.replace('$', '').replace('USD', '').strip()
+    
+    # Handle "Usually XX" format
+    if 'usually' in price_str.lower():
+        price_str = price_str.lower().replace('usually', '').strip()
+    
+    # Extract the first number found
+    import re
+    numbers = re.findall(r'\d+\.?\d*', price_str)
+    if numbers:
+        try:
+            return float(numbers[0])
+        except ValueError:
+            return None
+    return None
 
 class SearchAPIProvider(BaseProvider):
     """SearchAPI.io product search implementation"""
@@ -170,21 +194,17 @@ class SearchAPIProvider(BaseProvider):
                     product_link = item.get('product_link', '#')
                     
                     price_str = item.get('price', '0')
-                    if isinstance(price_str, str):
-                        # Remove currency symbols and commas
-                        price_str = price_str.replace('$', '').replace(',', '')
-                        price = float(price_str)
-                    else:
-                        price = float(price_str)
-                        
-                    original_price_str = item.get('original_price')
+                    price = _clean_price_string(price_str)
+                    if price is None:
+                        logger.warning(f"Could not parse price '{price_str}' for item {item.get('product_id', 'Unknown')}")
+                        continue
+                    
+                    # Handle original price if available
                     original_price = None
+                    original_price_str = item.get('original_price')
+                    
                     if original_price_str:
-                        if isinstance(original_price_str, str):
-                            original_price_str = original_price_str.replace('$', '').replace(',', '')
-                            original_price = float(original_price_str)
-                        else:
-                            original_price = float(original_price_str)
+                        original_price = _clean_price_string(original_price_str)
 
                     product = ProductDeal(
                         product_id=item.get('product_id', ''),
@@ -277,31 +297,30 @@ class SearchAPIProvider(BaseProvider):
                     data = await response.json()
                     
                     # Log the raw API response for debugging
-                    logger.info(f"Async SearchAPI.io shopping_results count: {len(data.get('shopping_results', []))}")
-                    
+                    logger.info(f"Async SearchAPI.io shopping_results count: {len(data.get('shopping_results', []))}")                
+                    shopping_results = data.get('shopping_results', [])
+                    logger.info(f"Processing {len(shopping_results)} items from SearchAPI.io response")
                     items = []
-                    # Process items directly instead of in parallel to reduce API calls
-                    for item in data.get('shopping_results', []):
+                    for idx, item in enumerate(shopping_results):
                         try:
+                            logger.debug(f"Processing item {idx + 1}/{len(shopping_results)}")
                             # Use the product link directly instead of fetching retailer URL
                             product_link = item.get('product_link', '#')
                             
                             price_str = item.get('price', '0')
-                            if isinstance(price_str, str):
-                                # Remove currency symbols and commas
-                                price_str = price_str.replace('$', '').replace(',', '')
-                                price = float(price_str)
-                            else:
-                                price = float(price_str)
-                                
-                            original_price_str = item.get('original_price')
+                            logger.debug(f"Raw price string: '{price_str}' for item {item.get('title', 'Unknown')}")
+                            price = _clean_price_string(price_str)
+                            if price is None:
+                                logger.warning(f"Could not parse price '{price_str}' for item {item.get('title', 'Unknown')}")
+                                continue
+                            logger.debug(f"Parsed price: {price} for item {item.get('title', 'Unknown')}")
+                            
+                            # Handle original price if available
                             original_price = None
+                            original_price_str = item.get('original_price')
+                            
                             if original_price_str:
-                                if isinstance(original_price_str, str):
-                                    original_price_str = original_price_str.replace('$', '').replace(',', '')
-                                    original_price = float(original_price_str)
-                                else:
-                                    original_price = float(original_price_str)
+                                original_price = _clean_price_string(original_price_str)
                             
                             product = ProductDeal(
                                 product_id=item.get('product_id', ''),
@@ -333,6 +352,7 @@ class SearchAPIProvider(BaseProvider):
                             continue
                     
                     result = items[:effective_max]
+                    logger.info(f"Successfully processed {len(items)} items out of {len(shopping_results)} total results")
                     # Cache the results
                     self._cache[cache_key] = result
                     return result

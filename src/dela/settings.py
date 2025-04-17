@@ -1,3 +1,5 @@
+print("starting settings file ")
+
 import dj_database_url
 import os
 
@@ -10,7 +12,10 @@ from dotenv import load_dotenv
 from datetime import timedelta
 from corsheaders.defaults import default_headers
 
-load_dotenv()
+
+
+load_dotenv(dotenv_path=os.path.join(BASE_DIR, '.env'))
+
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv('SECRET_KEY')

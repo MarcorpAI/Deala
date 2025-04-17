@@ -9,7 +9,7 @@ from .models import ProductDeal, UserPreference
 from langchain.chains import LLMChain
 from langchain.memory import ConversationBufferMemory
 from dataclasses import dataclass
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Union
 import json
 import logging
 import re
@@ -18,6 +18,8 @@ from .searchapi_io import DealAggregator
 from transformers import pipeline
 import asyncio
 import hashlib
+from datetime import datetime, timedelta
+from collections import Counter
 
 #nlp imports 
 import spacy
@@ -61,6 +63,7 @@ import logging
 import re
 from dataclasses import dataclass
 from typing import Dict, Optional, List
+import random  # Add missing random import
 import spacy
 from textblob import TextBlob
 
@@ -434,7 +437,7 @@ class UniversalSearchExtractor:
         # Pattern for specific price ranges
         range_patterns = [
             r'between\s*\$?(\d+(?:\.\d{2})?)\s*(?:and|to|-)\s*\$?(\d+(?:\.\d{2})?)',
-            r'\$?(\d+(?:\.\d{2})?)\s*(?:-|to)\s*\$?(\d+(?:\.\d{2})?)',
+            r'\$?(\d+)\s*-\s*\$?(\d+)',
             r'under\s*\$?(\d+(?:\.\d{2})?)',
             r'less\s*than\s*\$?(\d+(?:\.\d{2})?)',
             r'max(?:imum)?\s*\$?(\d+(?:\.\d{2})?)',
@@ -539,6 +542,195 @@ class UniversalSearchExtractor:
 
 
 
+class ContextResolver:
+    """
+    Handles merging of previous context with new queries
+    """
+    def __init__(self, llm):
+        self.llm = llm
+        self.context_prompt = ChatPromptTemplate.from_template("""
+        You are a shopping assistant resolving ambiguous references. 
+        Current conversation context: {context}
+        New query: {query}
+
+        Clarify if the reference is ambiguous by asking ONE short question.
+        If clear, return the merged context in JSON format.
+        """)
+
+    async def resolve_context(self, query: str, previous_context: dict) -> dict:
+        """
+        Merge previous context with new query, clarifying ambiguities
+        """
+        chain = self.context_prompt | self.llm
+        
+        # First pass - try to merge automatically
+        try:
+            response = await chain.ainvoke({
+                'context': json.dumps(previous_context),
+                'query': query
+            })
+            
+            if '?' in response.content:  # Needs clarification
+                return {'needs_clarification': response.content}
+                
+            return json.loads(response.content)
+        except Exception as e:
+            logger.error(f"Context resolution failed: {str(e)}")
+            return previous_context  # Fallback to previous context
+
+class ProductRanker:
+    """
+    Ranks products based on user persona and needs
+    """
+    def __init__(self, llm):
+        self.llm = llm
+        self.ranking_prompt = ChatPromptTemplate.from_template("""
+        Rank these products for a {persona} based on this query: {query}
+        Products: {products}
+        
+        Return JSON with:
+        - ranked_products: list of product IDs in order
+        - explanation: short reasoning for top 3
+        """)
+    
+    async def rank_products(self, products: List[Dict], query: str, persona: str = None) -> Dict:
+        """
+        Rank products based on persona and query
+        """
+        if not persona:
+            return {'ranked_products': products, 'explanation': ''}
+            
+        chain = self.ranking_prompt | self.llm
+        try:
+            response = await chain.ainvoke({
+                'persona': persona,
+                'query': query,
+                'products': json.dumps([{
+                    'id': p.get('id'),
+                    'title': p.get('title'),
+                    'features': p.get('features', []),
+                    'price': p.get('price')
+                } for p in products])
+            })
+            return json.loads(response.content)
+        except Exception as e:
+            logger.error(f"Ranking failed: {str(e)}")
+            return {'ranked_products': products, 'explanation': ''}
+
+class ProductComparator:
+    """
+    Compares products based on specs and user needs
+    """
+    def __init__(self, llm):
+        self.llm = llm
+        self.comparison_prompt = ChatPromptTemplate.from_template("""
+        Compare these products based on the user's request: {query}
+        Products: {products}
+        
+        Return JSON with:
+        - comparison: natural language comparison
+        - key_differences: list of key differences
+        - recommendation: which one to choose and why
+        """)
+    
+    async def compare(self, products: List[Dict], query: str) -> Dict:
+        """
+        Generate detailed product comparison
+        """
+        if len(products) < 2:
+            return {
+                'comparison': '',
+                'key_differences': [],
+                'recommendation': ''
+            }
+            
+        chain = self.comparison_prompt | self.llm
+        try:
+            response = await chain.ainvoke({
+                'query': query,
+                'products': json.dumps([{
+                    'id': p.get('id'),
+                    'title': p.get('title'),
+                    'price': p.get('price'),
+                    'features': p.get('features', []),
+                    'specs': p.get('specs', {})
+                } for p in products])
+            })
+            return json.loads(response.content)
+        except Exception as e:
+            logger.error(f"Comparison failed: {str(e)}")
+            return {
+                'comparison': f"Here's how these {len(products)} compare...",
+                'key_differences': [],
+                'recommendation': ''
+            }
+
+class PreferenceLearner:
+    """
+    Tracks and learns from user choices to improve recommendations
+    """
+    def __init__(self):
+        self.choice_history = {}
+        
+    def track_choice(self, user_id: str, product: Dict, query: str):
+        """
+        Record when a user selects a product
+        """
+        if user_id not in self.choice_history:
+            self.choice_history[user_id] = []
+            
+        self.choice_history[user_id].append({
+            'product': product,
+            'query': query,
+            'timestamp': datetime.now().isoformat()
+        })
+    
+    def analyze_preferences(self, user_id: str) -> Dict:
+        """
+        Analyze user's historical choices to detect preferences
+        Returns:
+            {
+                'inferred_persona': str,
+                'price_sensitivity': float (0-1),
+                'preferred_brands': List[str]
+            }
+        """
+        if user_id not in self.choice_history or len(self.choice_history[user_id]) < 3:
+            return {}
+            
+        history = self.choice_history[user_id]
+        
+        # Analyze price sensitivity
+        avg_price = sum(p['product'].get('price',0) for p in history)/len(history)
+        price_sensitivity = min(1, avg_price/1000)  # Normalize to 0-1 range
+        
+        # Detect brands
+        brands = [
+            p['product'].get('brand', '').lower() 
+            for p in history 
+            if p['product'].get('brand')
+        ]
+        brand_counts = Counter(brands)
+        
+        # Detect persona from query patterns
+        persona_keywords = {
+            'gamer': ['game', 'gaming', 'esports'],
+            'programmer': ['code', 'programming', 'developer'],
+            'student': ['student', 'school', 'college']
+        }
+        
+        detected_persona = None
+        for persona, keywords in persona_keywords.items():
+            if any(kw in p['query'].lower() for kw in keywords for p in history):
+                detected_persona = persona
+                break
+                
+        return {
+            'inferred_persona': detected_persona,
+            'price_sensitivity': price_sensitivity,
+            'preferred_brands': [b[0] for b in brand_counts.most_common(3)]
+        }
+
 class ConversationalDealFinder:
     """Enhanced conversational deal finder with memory and follow-ups"""
     
@@ -560,6 +752,12 @@ class ConversationalDealFinder:
             'user_preferences': {}
         }
         self.extractor = UniversalSearchExtractor()
+        self.context_resolver = ContextResolver(self.llm)
+        self.ranker = ProductRanker(self.llm)
+        self.comparator = ProductComparator(self.llm)
+        self.preference_learner = PreferenceLearner()
+        self.query_cache = {}  # Add cache dictionary
+        self.cache_expiry = timedelta(minutes=30)
 
     def _get_previous_deals_from_context(self, conversation_id: str) -> List[ProductDeal]:
         """Retrieve previous deals from conversation context"""
@@ -620,42 +818,55 @@ class ConversationalDealFinder:
             'shared_context': product.get('shared_context', {})
         }
 
-    def detect_intent(self, query: str, context: str = "") -> dict:
-        """Determine if the user wants a new search or just more info"""
-        prompt = f"""
-        Conversation Context: {context}
-        Current Query: {query}
-        
-        Determine if the user wants to:
-        1. COMPARE existing products (e.g., "which is best")
-        2. FILTER current results (e.g., "only under $50")
-        3. GET_MORE similar products
-        4. NEW_SEARCH unrelated items
-        
-        Return JSON with: {intent, requires_search, explanation}
+    async def detect_intent(self, query: str, context: str = "") -> dict:
         """
+        Enhanced intent detection with context resolution
+        """
+        lower_query = query.lower()
+        followup_terms = [
+            "which of these", "which of those", "which is best", "which is cheapest", "out of these", "out of those",
+            "compare", "between these", "between those"
+        ]
         
-        try:
-            response = self.llm.invoke(prompt)
-            intent_data = json.loads(response.content)
-            
-            if any(term in query.lower() for term in ["under $", "below $", "less than $"]):
-                intent_data = {
-                    "intent": "filter",
-                    "requires_search": True,
-                    "explanation": "Price filter requires new search"
-                }
-                
-            return intent_data
-        except Exception as e:
-            logger.error(f"Error detecting intent: {str(e)}")
+        # First check for obvious comparison intent
+        if any(term in lower_query for term in followup_terms):
             return {
-                "intent": "new_search",
-                "requires_search": True,
-                "explanation": "Fallback to search"
+                'intent': 'comparison',
+                'requires_search': False,
+                'explanation': 'Direct comparison request'
+            }
+            
+        # Then check for follow-up intent
+        followup_terms = ["this one", "that one", "the first one", "the last one", "previous results"]
+        if any(term in lower_query for term in followup_terms) and self.conversation_state['current_products']:
+            return {
+                'intent': 'followup',
+                'requires_search': False,
+                'explanation': 'Follow-up reference detected'
+            }
+            
+        # Finally use LLM for ambiguous cases
+        try:
+            prompt = f"""Determine shopping intent from query:
+            Query: {query}
+            
+            Possible intents:
+            - new_search
+            - filter
+            - followup
+            - comparison
+            
+            Return JSON with 'intent' and 'explanation'"""
+            response = await self.llm.ainvoke(prompt)
+            return json.loads(response.content)
+        except Exception:
+            return {
+                'intent': 'new_search',
+                'requires_search': True,
+                'explanation': 'Fallback to search'
             }
 
-    def generate_product_description(self, product: ProductDeal, query: str) -> str:
+    async def generate_product_description(self, product: ProductDeal, query: str) -> str:
         """Generate AI-powered product description"""
         try:
             if not product or not query:
@@ -689,486 +900,525 @@ class ConversationalDealFinder:
             logger.error(f"Error generating description: {str(e)}")
             return product.description or "Unable to generate description"
 
-    def get_user_preferences(self, user_id: str) -> UserPreference:
-        """Get or create user preferences"""
-        if user_id not in self.user_preferences:
-            self.user_preferences[user_id] = UserPreference()
-        return self.user_preferences[user_id]
-
-    def generate_comparison(self, products: List[ProductDeal], user_id: str) -> str:
-        """Generate a comparison of products"""
-        if len(products) < 2:
-            return ""
-            
-        prefs = self.get_user_preferences(user_id)
-        
-        product_list = "\n".join([
-            f"Product {i+1}:\n"
-            f"Title: {p.title}\n"
-            f"Price: ${p.price}\n"
-            f"Condition: {p.condition or 'Not specified'}\n"
-            f"Rating: {p.rating or 'Not rated'}\n"
-            for i, p in enumerate(products)
-        ])
-        
-        prompt = f"""
-        Compare these products based on the user's preferences:
-        {product_list}
-        
-        User Preferences:
-        - Max Price: {prefs.max_price or 'No limit'}
-        - Preferred Condition: {prefs.preferred_condition or 'No preference'}
-        - Min Rating: {prefs.min_rating or 'No minimum'}
-        
-        Provide a concise comparison (3-4 sentences) highlighting:
-        1. Best value option
-        2. Best quality option
-        3. Any standout features
-        4. Which one you recommend and why
+    def get_user_preferences(self, user_id: str) -> Dict:
         """
-        
-        try:
-            response = self.llm.invoke(prompt)
-            return response.content
-        except Exception as e:
-            logger.error(f"Error generating comparison: {str(e)}")
-            return "Here's a comparison of the products..."
-
-    def _generate_followup_questions(self, query: str, results: List[ProductDeal], user_id: str) -> str:
-        """Generate engaging follow-up prompts"""
-        if not results:
-            return random.choice([
-                "Want to try a different search?",
-                "Should we adjust the filters?",
-                "Maybe try more general terms?"
-            ])
-        
-        prompt = f"""Based on this query and results, suggest 2 fun follow-up questions:
-        Original Query: {query}
-        Results Shown: {len(results)} products
-        
-        Requirements:
-        - Use emojis and humor
-        - Suggest natural next steps
-        - Max 1 line per question
-        
-        Examples:
-        - "Want me to pick a favorite? I've got strong opinions! 🏆"
-        - "Should we check shipping details? 🚚💨"
-        - "Need help deciding? I'm great at spending imaginary money! 💸"
+        Enhanced to include persona tracking
         """
-        
-        try:
-            response = self.llm.invoke(prompt)
-            return response.content
-        except Exception:
-            return "Would you like more details about any of these?"
-
-    
-    def find_deals(self, natural_query: str, user_id: str, conversation_id: str = None) -> Dict:
-        """Enhanced conversational deal finder with proper error handling"""
-        try:
-            # Initialize context and previous deals
-            context = ""
-            previous_deals = []
+        if not hasattr(self, 'conversation_state'):
+            self.conversation_state = {}
             
-            # Build conversation context if conversation_id exists
-            if conversation_id:
-                try:
-                    from .models import ConversationMessage
-                    messages = ConversationMessage.objects.filter(
-                        conversation_id=conversation_id
-                    ).order_by('-created_at')[:5]  # Get last 5 messages
-                    
-                    context_parts = []
-                    for msg in messages:
-                        role = "User" if msg.role == 'user' else "Assistant"
-                        context_parts.append(f"{role}: {msg.content}")
-                    
-                    context = "\n".join(context_parts)
-                    previous_deals = self._get_previous_deals_from_context(conversation_id) or []
-                    
-                except Exception as e:
-                    logger.error(f"Error loading conversation context: {str(e)}")
-                    context = ""
-                    previous_deals = []
-
-            # Initialize result structure
-            result = {
-                "deals": {'searchapi': []},
-                "comparison": "",
-                "followup_questions": "",
-                "user_preferences": self.get_user_preferences(user_id),
-                "shared_context": {},
-                "query_understanding": "",
-                "response": ""
+        if 'user_preferences' not in self.conversation_state:
+            self.conversation_state['user_preferences'] = {}
+            
+        if user_id and user_id not in self.conversation_state['user_preferences']:
+            self.conversation_state['user_preferences'][user_id] = {
+                'persona': None,
+                'preferred_condition': None,
+                'max_price': None,
+                'min_rating': None
             }
+            
+        return self.conversation_state['user_preferences'].get(user_id, {})
 
-            # Detect intent with proper error handling
-            try:
-                intent_data = self.detect_intent(natural_query, context)
-                intent = intent_data.get('intent', 'new_search')  # Default to new search
-                logger.info(f"Detected intent: {intent}")
-            except Exception as e:
-                logger.error(f"Error detecting intent: {str(e)}")
-                intent = 'new_search'  # Safe default
-                intent_data = {
-                    "intent": intent,
-                    "requires_search": True,
-                    "explanation": "Fallback to search due to error"
-                }
-
-            # Handle different intents appropriately
-            if intent == 'comparison' and previous_deals:
-                logger.info("Handling comparison intent with previous deals")
-                result['deals']['searchapi'] = previous_deals
-                result['comparison'] = self.generate_comparison(previous_deals, user_id)
-                result['response'] = "Let me analyze your options... ✨"
+    async def find_deals(self, query: Union[str, Dict], context: str = "", user_id: str = None) -> Dict:
+        """
+        Safely handle deal finding with comprehensive error checking
+        """
+        # Initialize state if missing
+        if not hasattr(self, 'conversation_state'):
+            self.conversation_state = {'last_query': '', 'current_products': []}
+            
+        try:
+            logger.info(f"Starting find_deals for query: {query} | context: {context}")
+            
+            # Safely extract query string
+            query_str = ''
+            if isinstance(query, dict):
+                query_str = query.get('text', '')
+            elif isinstance(query, str):
+                query_str = query
+            else:
+                raise ValueError(f"Invalid query type: {type(query)}")
                 
-            elif intent in ['new_search', 'filter'] or not previous_deals:
-                logger.info(f"Performing new search for intent: {intent}")
-                query_result = self._parse_natural_language_query(f"{context}\nUser: {natural_query}")
+            if not query_str.strip():
+                logger.warning("Empty query received")
+                return self._empty_response("Please provide a search query")
                 
-                # Inject conversation context into search parameters
-                if previous_deals:
-                    query_result['shared_context'] = {
-                        **query_result.get('shared_context', {}),
-                        'previous_products': [p.title for p in previous_deals[:3]]
-                    }
+            # Update state
+            self.conversation_state['last_query'] = query_str
+            
+            # Process intent
+            intent_result = await self._safe_detect_intent(query_str, context)
+            requires_search = intent_result.get('requires_search', True)
+            
+            # Prepare search terms
+            search_terms = self._build_search_terms(query_str, context, requires_search)
+            logger.debug(f"Final search terms: {search_terms}")
+            
+            # Execute search
+            products = []
+            if requires_search:
+                products = await self._execute_product_search(search_terms)
+                self.conversation_state['current_products'] = products
+            
+            # Generate a truly AI conversational response based on the products found
+            if products:
+                # Use the LLM to create a dynamic, personalized response
+                ai_message = await self._generate_conversational_response(products, query_str)
+            else:
+                ai_message = "I couldn't find any products that match your criteria. Would you like to try a different search?"
                 
-                if query_result.get('products'):
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    try:
-                        search_results = loop.run_until_complete(
-                            self._search_products_parallel(
-                                query_result['products'],
-                                context=context
-                            )
-                        )
-                        # Validate results match conversation context
-                        validated_results = [
-                            r for r in search_results[0].get('searchapi', [])
-                            if self._validate_result_relevance(r, natural_query, context)
-                        ]
-                        result['deals']['searchapi'] = validated_results
-                    except Exception as e:
-                        logger.error(f"Search error: {str(e)}")
-                        result['deals']['searchapi'] = []
-                    finally:
-                        loop.close()
-
-            # Generate appropriate response based on results
-            try:
-                if intent == 'comparison' and result['comparison']:
-                    result['response'] = result['comparison']
-                else:
-                    result['response'] = self._generate_response_from_results(
-                        products=result['deals']['searchapi'],
-                        query=natural_query,
-                        user_id=user_id,
-                        context=context
-                    )
-            except Exception as e:
-                logger.error(f"Error generating response: {str(e)}")
-                result['response'] = "Here are some options I found..."
-
-            # Generate follow-ups using current context
-            try:
-                result['followup_questions'] = self._generate_followup_questions(
-                    query=natural_query,
-                    results=result['deals']['searchapi'],
-                    user_id=user_id,
-                    context=context
-                )
-            except Exception as e:
-                logger.error(f"Error generating followups: {str(e)}")
-                result['followup_questions'] = "Would you like more details?"
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Critical error in find_deals: {str(e)}")
-            logger.error(traceback.format_exc())
             return {
-                "deals": {'searchapi': []},
-                "comparison": "",
-                "followup_questions": "Want to try a different search?",
-                "user_preferences": self.get_user_preferences(user_id),
-                "shared_context": {},
-                "query_understanding": "",
-                "response": "Oops! My shopping cart hit a bump 😅 Let's try again?"
+                'message': ai_message,  # Use the AI-generated message
+                'products': products,
+                'followup_questions': self._generate_followup_questions(products, query_str, user_id) if products else []
             }
+            
+        except Exception as e:
+            logger.error(f"Critical error in find_deals: {str(e)}", exc_info=True)
+            return self._empty_response(f"Sorry, we encountered an error: {str(e)}")
+            
+    async def _safe_detect_intent(self, query: str, context: str) -> Dict:
+        """Safely wrapped intent detection"""
+        try:
+            return await self.detect_intent(query, context)
+        except Exception as e:
+            logger.warning(f"Intent detection failed: {str(e)}")
+            return {'intent': 'new_search', 'requires_search': True}
+            
+    async def _execute_product_search(self, search_terms: str) -> List[Dict]:
+        """Execute product search with real API"""
+        # Check cache first
+        cached = self.query_cache.get(search_terms)
+        if cached and datetime.now() - cached['timestamp'] < self.cache_expiry:
+            logger.info(f"Using cached results for: {search_terms}")
+            return cached['products']
         
-    def _generate_response_from_results(self, products: List[ProductDeal], query: str, user_id: str) -> str:
-        """Generate response using actual found products"""
-        if not products:
-            return random.choice([
-                "🕵️♂️ My shopping radar came up empty! Let's try different terms?",
-                "Hmm, the shopping gremlins hid all the good stuff! 🧌 Try another search?"
-            ])
-        
-        # Build product highlights
-        highlights = []
-        for i, product in enumerate(products[:3]):  # Use top 3 products
-            price = f"${product.price:.2f}"
-            emoji = self._get_price_emoji(product.price)
-            highlights.append(
-                f"- {product.title} - {self._get_creative_description(product)} {emoji} ({price})"
+        try:
+            # First validate we should proceed
+            if not search_terms.strip():
+                logger.warning("Empty search terms - skipping API call")
+                return []
+                
+            logger.info(f"Executing REAL API search for: {search_terms}")
+            
+            # Extract price filters first
+            max_price = None
+            if 'under' in search_terms.lower() or 'below' in search_terms.lower():
+                match = re.search(r'(under|below)\s*\$?(\d+)', search_terms.lower())
+                if match:
+                    max_price = float(match.group(2))
+                    logger.info(f"Extracted max_price: {max_price} from search terms: {search_terms}")
+            
+            # Make the actual API call with conservative parameters
+            results = await self.provider.search_deals_async(
+                query=search_terms,
+                max_price=max_price,
+                max_results=10  # Increase to get more results
             )
-        
-        # Generate response
-        prompt = f"""You're a fun shopping assistant who just found these products:
-        {chr(10).join(highlights)}
-        
-        Create a 2-3 sentence response with:
-        1. Exciting opening line
-        2. Brief mention of what makes these special
-        3. Playful call-to-action
-        Include relevant emojis and keep it under 200 characters.
-        """
-        
-        try:
-            response = self.llm.invoke(prompt)
-            return response.content
-        except Exception:
-            return f"Found {len(products)} options for '{query}'! Need details on any?"
-
-    
-    def _generate_friendly_response(self, products: List[ProductDeal], query: str, user_id: str) -> str:
-        """Generate initial friendly product presentation"""
-        if not products:
-            return random.choice([
-                "🕵️♂️ My shopping radar came up empty! Let's try different terms?",
-                "Hmm, the shopping gremlins hid all the good stuff! 🧌 Try another search?"
-            ])
-        
-        # Count products by price range to make the response more dynamic
-        budget_friendly = sum(1 for p in products if p.price < 50)
-        mid_range = sum(1 for p in products if 50 <= p.price < 200)
-        premium = sum(1 for p in products if p.price >= 200)
-        
-        prompt = f"""You're a fun shopping assistant responding to: '{query}'
-        Found {len(products)} products including:
-        - {budget_friendly} budget-friendly options 💰
-        - {mid_range} mid-range picks ⚖️  
-        - {premium} premium finds 💎
-
-        Create a response with:
-        1. Playful opening line matching the query tone
-        2. Highlight 1-2 standout products with emojis
-        3. Fun fact about one product
-        4. Playful call-to-action
-        
-        Example style:
-        "Holy guacamole! 🥑 Found these gems while searching for '{query}':
-        - The '{products[0].title}' is flying off shelves! {products[0].price} {'💸' if products[0].price > 100 else '💰'}
-        - '{products[1].title}' has shoppers raving ({products[1].rating}⭐)
-        Did you know? The {products[2].title} comes with {random.choice(['free shipping', 'a surprise gift', 'a 2-year warranty'])}!
-        Want me to work my magic on any of these? ✨"
-        """
-        
-        try:
-            response = self.llm.invoke(prompt)
-            return response.content
-        except Exception as e:
-            logger.error(f"Error generating friendly response: {str(e)}")
-            top_products = "\n".join([f"- {p.title} (${p.price})" for p in products[:2]])
-            return f"Found some cool options for '{query}'!\n{top_products}\nWant details about any?"
-
-
-    
-    def _get_price_emoji(self, price: float) -> str:
-        if price < 20: return "💰"
-        if price < 100: return "💸"
-        return "🤑"
-
-    def _get_creative_description(self, product: ProductDeal) -> str:
-        prompts = [
-            f"Describe '{product.title}' in 5 words or less",
-            f"What's quirky about {product.title}?",
-            f"Make a playful tagline for {product.title}"
-        ]
-        try:
-            response = self.llm.invoke(random.choice(prompts))
-            return response.content.strip('"\'')
-        except Exception:
-            return "Great find!"
-    
-
-    def _generate_comparison_response(self, products: List[ProductDeal], user_id: str) -> str:
-        """Generate fun product comparison"""
-        if len(products) < 2:
-            return ""
-        
-        prefs = self.get_user_preferences(user_id)
-        product_list = "\n".join([f"{p.title} (${p.price})" for p in products])
-        
-        prompt = f"""Compare these products like a witty friend:
-        {product_list}
-        
-        User Preferences:
-        - Budget: {'$'+str(prefs.max_price) if prefs.max_price else 'No limit'}
-        - Condition: {prefs.preferred_condition or 'Any'}
-        
-        Include:
-        1. Funny analogies ("This blender is the Ferrari of kitchen gadgets")
-        2. Emoji reactions to key features
-        3. Clear recommendation with humorous reasoning
-        4. Avoid bullet points - keep it conversational
-        
-        Example style:
-        "The $45 vase is like a reliable Honda 🚗 (gets the job done), while the $89 coffee kit \
-        is that extra friend who brings espresso to funerals ☕️⚰️ (intense but memorable). \
-        My vote? Go wild with coffee - life's too short for boring gifts! 😈"
-        """
-        
-        try:
-            response = self.llm.invoke(prompt)
-            return response.content
-        except Exception:
-            return "Here's how these compare..."
-
-    
-    def _generate_safe_response(self, products: List[ProductDeal], query: str, user_id: str, intent: str, previous_deals: List) -> str:
-        """Generate response with null checks"""
-        products = products or []
-        try:
-            if intent == 'comparison':
-                return self._generate_comparison_response(products, user_id)
             
-            # Always try to generate friendly response for non-comparison queries
-            friendly_response = self._generate_friendly_response(products, query, user_id)
-            if friendly_response:
-                return friendly_response
+            if not results or not isinstance(results, dict):
+                logger.error(f"Invalid API response format: {type(results)}")
+                return []
+            
+            # Log the complete structure of the results for debugging
+            logger.debug(f"Raw results structure: {results.keys()}")
+            
+            # First check for 'searchapi' key (the actual key used by DealAggregator)
+            if 'searchapi' in results and isinstance(results['searchapi'], list):
+                products = results['searchapi']
+                logger.info(f"Found {len(products)} products under 'searchapi' key")
+            else:
+                # Fall back to 'products' key if searchapi isn't present
+                products = results.get('products', [])
+                logger.info(f"Falling back to 'products' key, found {len(products)} products")
+            
+            # Convert products to appropriate format
+            formatted_products = []
+            for product in products:
+                if isinstance(product, dict):
+                    # Already a dict, keep as is
+                    formatted_products.append(product)
+                else:
+                    # Convert ProductDeal object to dict
+                    try:
+                        formatted_products.append({
+                            'product_id': getattr(product, 'product_id', ''),
+                            'title': getattr(product, 'title', ''),
+                            'price': getattr(product, 'price', 0),
+                            'original_price': getattr(product, 'original_price', None),
+                            'url': getattr(product, 'url', ''),
+                            'image_url': getattr(product, 'image_url', ''),
+                            'retailer': getattr(product, 'retailer', ''),
+                            'description': getattr(product, 'description', ''),
+                            'rating': getattr(product, 'rating', None),
+                            'condition': getattr(product, 'condition', None),
+                        })
+                    except Exception as e:
+                        logger.error(f"Error converting product object to dict: {str(e)}")
+            
+            if not formatted_products:
+                logger.warning(f"No valid products returned for: {search_terms}")
+                return []
                 
-            # Fallbacks only if friendly response fails
+            logger.info(f"API search successful - found {len(formatted_products)} formatted products")
+            self.query_cache[search_terms] = {'products': formatted_products, 'timestamp': datetime.now()}
+            return formatted_products
+            
+        except Exception as e:
+            logger.error(f"API search failed: {str(e)}", exc_info=True)
+            return []
+
+    async def _generate_conversational_response(self, products: List[Dict], query: str) -> str:
+        """Generate a truly dynamic AI response about the products found using the LLM"""
+        try:
             if not products:
-                return random.choice([
-                    "🕵️♂️ My shopping radar came up empty! Let's try different terms?",
-                    "Hmm, the shopping gremlins hid all the good stuff! 🧌 Try another search?"
-                ])
+                return "I couldn't find any products matching your search. Would you like to try different search terms?"
+            
+            # Prepare a summary of the found products to feed to the LLM
+            product_count = len(products)
+            
+            # Extract price information
+            prices = []
+            for p in products:
+                if isinstance(p.get('price'), (int, float)):
+                    prices.append(p.get('price'))
+                elif p.get('currentPrice'):
+                    prices.append(p.get('currentPrice'))
+            
+            price_range = "varied prices"
+            if prices:
+                min_price = min(prices)
+                max_price = max(prices)
+                if min_price == max_price:
+                    price_range = f"${min_price:.2f}"
+                else:
+                    price_range = f"${min_price:.2f} to ${max_price:.2f}"
+            
+            # Extract product details for the top 3 products
+            top_products = []
+            for i, product in enumerate(products[:3]):
+                product_name = product.get('title') or product.get('name', 'unknown product')
+                product_price = None
                 
-            return "Here are some options I found..."
-        except Exception as e:
-            logger.error(f"Error generating response: {str(e)}")
-            return "Here are some options I found..."
-
-    
-    def _generate_safe_comparison(self, products: List[ProductDeal], user_id: str) -> str:
-        """Generate comparison with null checks"""
-        products = products or []
-        try:
-            if len(products) >= 2:
-                return self._generate_comparison_response(products, user_id)
-            return ""
-        except Exception:
-            return ""
-
-    
-    def _generate_safe_followups(self, query: str, results: List[ProductDeal], user_id: str) -> str:
-        """Generate followups with null checks"""
-        results = results or []
-        try:
-            return self._generate_followup_questions(query, results, user_id)
-        except Exception:
-            return "Would you like more details?"
-
-    
-
-    def _validate_result_relevance(self, product: ProductDeal, query: str, context: str) -> bool:
-        """Validate if product matches conversation context"""
-        context = context.lower()
-        query = query.lower()
-        title = product.title.lower()
+                if isinstance(product.get('price'), (int, float)):
+                    product_price = product.get('price')
+                elif product.get('currentPrice'):
+                    product_price = product.get('currentPrice')
+                    
+                product_price_str = f"${product_price:.2f}" if product_price else "price unavailable"
+                product_retailer = product.get('retailer', 'unknown retailer')
+                
+                top_products.append(f"{product_name} ({product_price_str} from {product_retailer})")
+            
+            # Create a prompt for the LLM to generate a conversational response
+            prompt = ChatPromptTemplate.from_template("""
+            You are a helpful shopping assistant. The user searched for: "{query}"
+            
+            Your search found {product_count} products with prices ranging from {price_range}.
+            
+            Some notable options include:
+            {top_products}
+            
+            Please generate a friendly, conversational response that:
+            1. Acknowledges their search query
+            2. Mentions the number of results and price range
+            3. Highlights 1-2 interesting aspects of the results
+            4. Feels warm and helpful, not robotic
+            5. Is concise (max 2-3 sentences)
+            
+            Your response should NOT include any placeholders or variables. It should be ready to show to the user.
+            """)
+            
+            # Generate the response using the LLM
+            chain = prompt | self.llm
+            response = await chain.ainvoke({
+                "query": query,
+                "product_count": product_count,
+                "price_range": price_range,
+                "top_products": "\n- " + "\n- ".join(top_products) if top_products else "No specific product details available"
+            })
+            
+            # Extract just the content of the response
+            ai_message = response.content if hasattr(response, 'content') else str(response)
+            return ai_message
         
-        # Must not match these irrelevant terms
-        blacklist = ['magazine', 'subscription', 'user manual']
-        if any(term in title for term in blacklist):
-            return False
-            
-        # Should match context keywords
-        keywords = []
-        if "birthday" in context:
-            keywords.extend(['gift', 'present'])
-        if "18 year old" in context:
-            keywords.extend(['teen', 'young adult', 'college'])
-            
-        return any(kw in title for kw in keywords) if keywords else True
-
-    
-    def _validate_search_results(self, products: List[ProductDeal], context: str) -> List[ProductDeal]:
-        """Filter irrelevant results"""
-        return [
-            p for p in products 
-            if self._matches_context(p, context) and 
-            not self._is_irrelevant(p)
-        ]
+        except Exception as e:
+            logger.error(f"Error generating LLM-based response: {str(e)}", exc_info=True)
+            # Fallback to a simple response
+            return f"I found {len(products)} results for your search on '{query}'."
 
 
-    
-
+    def _empty_response(self, message: str) -> Dict:
+        """Standardized empty response"""
+        return {
+            'message': message,
+            'products': [],
+            'followup_questions': []
+        }
 
     def _parse_natural_language_query(self, query: str) -> Dict:
         """Inject conversation context into searches"""
         params = self.extractor.extract_search_parameters(query)
-        if self.conversation_state['current_products']:
+        # Only inject previous products if the query is short or ambiguous
+        inject_context = False
+        if len(query.split()) < 5 and self.conversation_state['current_products']:
+            inject_context = True
+        # Optionally, check for ambiguous/follow-up keywords
+        followup_keywords = ["more", "again", "like last", "similar", "another", "show me more"]
+        if any(kw in query.lower() for kw in followup_keywords) and self.conversation_state['current_products']:
+            inject_context = True
+        if inject_context:
+            import logging
+            logging.info(f"Injecting previous products into context for query: '{query}'")
             params['shared_context'] = {
                 **params.get('shared_context', {}),
                 'previous_products': [p.title for p in self.conversation_state['current_products'][:3]]
             }
+        else:
+            import logging
+            logging.info(f"NOT injecting previous products for query: '{query}' (specific or long query)")
         return params
 
-    async def _search_products_parallel(self, products: List[Dict], context: str = "") -> List[Dict]:
-        """Enhanced parallel search with conversation context awareness"""
-        search_tasks = []
+    async def handle_comparison(self, query: str) -> Dict:
+        """
+        Handle comparison requests and generate response
+        """
+        comparison = await self.comparator.compare(self.conversation_state['current_products'], query)
         
-        for product in products:
-            # Enhance search terms with context if needed
-            search_terms = list(dict.fromkeys([
-                *product.get('search_keywords', []),
-                product.get('product_type'),
-                *product.get('key_attributes', []),
-                product.get('color')
-            ]))
+        # Format final response
+        response_parts = []
+        if comparison.get('comparison'):
+            response_parts.append(comparison['comparison'])
+        if comparison.get('key_differences'):
+            response_parts.append("\nKey differences:" + 
+                "\n- " + "\n- ".join(comparison['key_differences']))
+        if comparison.get('recommendation'):
+            response_parts.append("\nRecommendation: " + comparison['recommendation'])
+        
+        return {
+            'response': "\n".join(response_parts),
+            'comparison_data': comparison
+        }
+
+    def _generate_followup_questions(self, products: List[Dict], query: str, user_id: str = None) -> List[str]:
+        """
+        Generate intelligent follow-up questions based on:
+        - Current products
+        - User's query
+        - User preferences
+        """
+        if not products:
+            return []
             
-            # If no specific terms, use conversation context
-            if not search_terms and context:
-                doc = self.nlp(context.lower())
-                nouns = [chunk.text for chunk in doc.noun_chunks]
-                search_terms = list(set(nouns))[:5]  # Use top 5 nouns from context
-            
-            if not search_terms:
-                search_terms = [product.get('product_type', 'gift')]
-                
-            search_query = ' '.join(search_terms).strip()
-            
-            # Add context-based modifiers
-            if "birthday" in context.lower() and "18" in context.lower():
-                search_query = f"birthday gift for 18 year old {search_query}"
-            
-            price_range = product.get('price_range', {})
-            
-            logger.info(f"Searching for: {search_query} (context: {context[:50]}...)")
-            
-            search_tasks.append(
-                self.provider.search_deals_async(
-                    query=search_query,
-                    min_price=price_range.get('min'),
-                    max_price=price_range.get('max'),
-                    max_results=5
-                )
+        prefs = self.get_user_preferences(user_id)
+        questions = []
+        
+        # Price-related questions
+        prices = [p.get('price', 0) for p in products]
+        if len(products) >= 2 and max(prices) - min(prices) > 50:
+            questions.append(
+                f"Would you like me to focus on {'budget' if prefs.get('max_price') else 'higher-end'} options?"
             )
         
-        results = await asyncio.gather(*search_tasks)
+        # Comparison questions
+        if len(products) >= 2:
+            questions.extend([
+                "Would you like a detailed comparison between these?",
+                "Should I highlight the key differences?"
+            ])
         
-        # Post-process results for context relevance
-        processed_results = []
-        for retailer_result in results:
-            processed_products = []
-            for product in retailer_result.get('searchapi', []):
-                if self._validate_result_relevance(product, "", context):
-                    processed_products.append(product)
-            processed_results.append({'searchapi': processed_products})
+        # Persona-specific questions
+        if prefs.get('persona'):
+            questions.append(
+                f"Would you like recommendations tailored for {prefs['persona']}?"
+            )
         
-        return processed_results
+        # Query-specific questions
+        if 'cheap' in query.lower():
+            questions.append("Should I look for more budget-friendly options?")
+        elif 'best' in query.lower():
+            questions.append("Would you like me to filter for top-rated items only?")
+            
+        # Default questions if none generated
+        if not questions:
+            questions = [
+                "Would you like more details about any of these?",
+                "Should I refine the search in any way?"
+            ]
+            
+        return questions[:3]  # Return max 3 most relevant questions
+
+    def record_user_choice(self, user_id: str, product: Dict, query: str):
+        """
+        Call this when user selects a product
+        """
+        self.preference_learner.track_choice(user_id, product, query)
+        
+        # Immediately update preferences for active session
+        user_prefs = self.get_user_preferences(user_id)
+        if product.get('price'):
+            user_prefs['max_price'] = min(
+                user_prefs.get('max_price', float('inf')), 
+                product['price'] * 1.2  # Add 20% buffer
+            )
+        if product.get('brand'):
+            if 'preferred_brands' not in user_prefs:
+                user_prefs['preferred_brands'] = []
+            if product['brand'] not in user_prefs['preferred_brands']:
+                user_prefs['preferred_brands'].append(product['brand'])
+                
+    def _validate_result_relevance(self, product: Union[Dict, ProductDeal], search_query: str, context: str) -> bool:
+        """
+        Updated with robust price handling
+        """
+        try:
+            # Get title safely
+            title = getattr(product, 'title', None) or (product.get('title') if isinstance(product, dict) else None)
+            if not title:
+                return False
+                
+            # Handle price safely
+            price_str = str(getattr(product, 'price', '') or (product.get('price', '') if isinstance(product, dict) else ''))
+            try:
+                float(price_str.replace('$', '').replace(',', '').split()[0])
+            except (ValueError, AttributeError):
+                return False
+                
+            # Rest of validation remains the same
+            # Get attributes safely for both types
+            description = getattr(product, 'description', '') or \
+                         (product.get('description', '') if isinstance(product, dict) else '')
+            categories = getattr(product, 'categories', []) or \
+                        (product.get('categories', []) if isinstance(product, dict) else [])
+            
+            # Query matching
+            query_terms = {term.lower() for term in search_query.split() if len(term) > 3}
+            product_text = f"{title.lower()} {description.lower()}"
+            
+            if query_terms and not any(term in product_text for term in query_terms):
+                return False
+                
+            # Context checks
+            if context:
+                context_lower = context.lower()
+                important_terms = {'gift', 'present', 'birthday', 'anniversary', 'wedding'}
+                
+                if any(term in context_lower for term in important_terms):
+                    if not any(cat.lower() in context_lower for cat in categories):
+                        return False
+                        
+            return True
+            
+        except Exception as e:
+            logger.error(f"Validation failed: {str(e)}")
+            return False
+            
+    def _get_user_persona(self, user_id: str) -> Optional[str]:
+        """Get persona from user preferences"""
+        if not user_id:
+            return None
+            
+        prefs = self.get_user_preferences(user_id)
+        return prefs.get('persona')
+
+    def _build_search_terms(self, query: str, context: str, requires_search: bool) -> str:
+        """
+        Construct final search terms from query and context
+        Returns: space-joined string of search terms
+        """
+        try:
+            # Don't modify the query if it's already formatted with price filters
+            price_patterns = [
+                r'(under|below|less than)\s*\$?(\d+)',
+                r'(over|above|more than)\s*\$?(\d+)',
+                r'\$?(\d+)\s*-\s*\$?(\d+)'
+            ]
+            
+            # Check if query already contains price filters
+            query_has_price_filter = any(re.search(pattern, query.lower()) for pattern in price_patterns)
+            
+            # If query already has price filters, use it as is
+            if query_has_price_filter:
+                logger.debug(f"Query already contains price filters: {query}")
+                # Only add context if needed
+                if requires_search and context.strip():
+                    return f"{query.strip()} {context.strip()}"
+                return query.strip()
+            
+            # Otherwise build with components
+            terms = []
+            
+            # Always include main query
+            if query.strip():
+                terms.append(query.strip())
+                
+            # Add context if exists and search is required
+            if requires_search and context.strip():
+                terms.append(context.strip())
+                
+            # Extract and include price filters only if not in original query
+            price_filters = self._extract_price_filters(query)
+            if price_filters:
+                terms.append(price_filters)
+                
+            logger.debug(f"Built search terms from query: {query} | context: {context}")
+            return ' '.join(terms) if terms else query
+            
+        except Exception as e:
+            logger.error(f"Error building search terms: {str(e)}")
+            return query
+            
+    def _extract_price_filters(self, query: str) -> str:
+        """Extract price range filters from natural language"""
+        price_patterns = [
+            (r'(under|below|less than)\s*\$?(\d+)', 'max_price'),
+            (r'(over|above|more than)\s*\$?(\d+)', 'min_price'),
+            (r'\$?(\d+)\s*-\s*\$?(\d+)', 'range')
+        ]
+        
+        for pattern, filter_type in price_patterns:
+            match = re.search(pattern, query)
+            if match:
+                if filter_type == 'max_price':
+                    return f"under {match.group(2)}"
+                elif filter_type == 'min_price':
+                    return f"over {match.group(2)}"
+                elif filter_type == 'range':
+                    return f"{match.group(1)} to {match.group(2)}"
+        return ""
+
+    async def _validate_product(self, product: Union[Dict, ProductDeal]) -> bool:
+        """Robust product validation with price parsing"""
+        try:
+            # Validate product type
+            if isinstance(product, str):
+                return False
+                
+            # Check required fields
+            if isinstance(product, dict):
+                title = product.get('title')
+                price = product.get('price')
+            else:
+                title = getattr(product, 'title', None)
+                price = getattr(product, 'price', None)
+            
+            # Basic validation
+            if not title:
+                logger.debug(f"Product validation failed: missing title")
+                return False
+                
+            # Price validation - price should already be a float from ProductDeal
+            if not isinstance(price, (int, float)) or price <= 0:
+                logger.debug(f"Product validation failed: invalid price {price}")
+                return False
+                
+            return True
+                
+        except Exception as e:
+            logger.exception(f"Product validation failed: {str(e)}")
+            return False
+            
+        except Exception:
+            logger.exception("Product validation failed")
+            return False

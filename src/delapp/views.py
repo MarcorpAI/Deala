@@ -63,6 +63,35 @@ import asyncio
 from rest_framework.permissions import AllowAny
 from rest_framework.decorators import permission_classes
 
+from django.http import JsonResponse
+from rest_framework.decorators import api_view
+from .llm_engine import ConversationalDealFinder
+import asyncio
+
+@api_view(['POST'])
+def find_deals(request):
+    """
+    Wrapper to handle async find_deals in sync Django view
+    """
+    try:
+        query = request.data.get('query', '')
+        context = request.data.get('context', '')
+        user_id = request.data.get('user_id', None)
+        
+        # Create event loop for async call
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Initialize and call async function
+        finder = ConversationalDealFinder()
+        result = loop.run_until_complete(
+            finder.find_deals(query, context, user_id)
+        )
+        
+        return JsonResponse(result)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
 
 
 
@@ -141,147 +170,7 @@ def product_description_view(request):
 
  
 
-
-# @api_view(['POST'])
-# @permission_classes([IsAuthenticated])
-# def user_query_api_view(request):
-#     logger.info(f"Received request data: {request.data}")
-    
-#     serializer = QuerySerializer(data=request.data, context={'request': request})
-    
-#     if serializer.is_valid():
-#         query_text = serializer.validated_data['query']
-#         user = request.user
-#         conversation_id = request.data.get('conversation_id')
-#         previous_deals = request.data.get('previous_deals', [])
-        
-#         try:
-#             with transaction.atomic():
-#                 # Get or create conversation
-#                 if conversation_id:
-#                     conversation = Conversation.objects.get(id=conversation_id, user=user)
-#                 else:
-#                     conversation = Conversation.objects.create(
-#                         user=user,
-#                         title=f"Search: {query_text[:50]}..."
-#                     )
-                
-#                 # Save user message
-#                 user_message = ConversationMessage.objects.create(
-#                     conversation=conversation,
-#                     role='user',
-#                     content=query_text
-#                 )
-                
-#                 # Convert previous deals to ProductDeal objects if they exist
-#                 previous_deal_objects = []
-#                 if previous_deals:
-#                     for deal in previous_deals:
-#                         try:
-#                             previous_deal_objects.append(ProductDeal(
-#                                 product_id=deal.get('product_id'),
-#                                 title=deal.get('name'),
-#                                 price=float(deal.get('currentPrice', 0)),
-#                                 original_price=float(deal.get('originalPrice', 0)) if deal.get('originalPrice') else None,
-#                                 url=deal.get('productLink'),
-#                                 image_url=deal.get('image_url'),
-#                                 retailer=deal.get('retailer'),
-#                                 description=deal.get('description'),
-#                                 rating=float(deal.get('rating', 0)) if deal.get('rating') else None,
-#                                 condition=deal.get('condition')
-#                             ))
-#                         except Exception as e:
-#                             logger.error(f"Error converting previous deal: {str(e)}")
-#                             continue
-                
-#                 # Get deals and conversation context
-#                 result = deal_finder.find_deals(
-#                     query_text, 
-#                     str(user.id), 
-#                     conversation.id,
-#                     previous_deal_objects if previous_deal_objects else None
-#                 )
-                
-#                 # Process deals into the expected format
-#                 structured_deals = []
-#                 for retailer, deals in result['deals'].items():
-#                     if not isinstance(deals, list):
-#                         continue
-                        
-#                     for deal in deals:
-#                         try:
-#                             savings_amount = None
-#                             savings_percentage = None
-#                             if deal.original_price and deal.price:
-#                                 try:
-#                                     savings_amount = str(deal.original_price - deal.price)
-#                                     savings_percentage = str((1 - deal.price/deal.original_price) * 100)
-#                                 except (ValueError, TypeError):
-#                                     pass
-
-#                             enhanced_description = deal_finder.generate_product_description(deal, query_text)
-
-#                             structured_deal = {
-#                                 'product_id': getattr(deal, 'product_id', ''),
-#                                 'name': getattr(deal, 'title', 'No title available'),
-#                                 'currentPrice': str(getattr(deal, 'price', 'N/A')),
-#                                 'originalPrice': str(deal.original_price) if hasattr(deal, 'original_price') and deal.original_price else None,
-#                                 'description': enhanced_description,
-#                                 'rating': getattr(deal, 'rating', None),
-#                                 'productLink': getattr(deal, 'url', '#'),
-#                                 'image_url': getattr(deal, 'image_url', None),
-#                                 'retailer': retailer.capitalize(),
-#                                 'savings': {
-#                                     'amount': savings_amount,
-#                                     'percentage': savings_percentage
-#                                 },
-#                                 'condition': getattr(deal, 'condition', None),
-#                                 'shipping_info': getattr(deal, 'shipping_info', None)
-#                             }
-#                             structured_deals.append(structured_deal)
-#                         except Exception as e:
-#                             logger.error(f"Error processing deal: {str(e)}")
-#                             continue
-                
-#                 # Save assistant message with search results
-#                 assistant_message = ConversationMessage.objects.create(
-#                     conversation=conversation,
-#                     role='assistant',
-#                     content=result.get('comparison', '') or 'Here are some options:',
-#                     search_results=structured_deals,
-#                     has_products=bool(structured_deals)
-#                 )
-                
-#                 # Get user preferences
-#                 user_prefs = result.get('user_preferences', {})
-#                 preferences = {
-#                     "preferred_condition": getattr(user_prefs, 'preferred_condition', None),
-#                     "max_price": getattr(user_prefs, 'max_price', None),
-#                     "min_rating": getattr(user_prefs, 'min_rating', None),
-#                     "favorite_categories": getattr(user_prefs, 'favorite_categories', None)
-#                 }
-                
-#                 return Response({
-#                     "conversation_id": conversation.id,
-#                     "message_id": assistant_message.id,
-#                     "query": query_text,
-#                     "response": result.get('comparison', '') or 'Here are some options:',
-#                     "deals": structured_deals,
-#                     "followup_questions": result.get('followup_questions', ''),
-#                     "user_preferences": preferences,
-#                     "timestamp": assistant_message.created_at.isoformat()
-#                 }, status=status.HTTP_200_OK)
-        
-#         except Exception as e:
-#             logger.exception(f"Error processing query: {str(e)}")
-#             return Response({
-#                 "error": "An error occurred while processing your query.",
-#                 "details": str(e)
-#             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-#     else:
-#         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
+ 
 
 
 @api_view(['POST'])
@@ -295,6 +184,7 @@ def user_query_api_view(request):
         query_text = serializer.validated_data['query']
         user = request.user
         conversation_id = request.data.get('conversation_id')
+        previous_deals = request.data.get('previous_deals', [])
         
         try:
             with transaction.atomic():
@@ -307,6 +197,93 @@ def user_query_api_view(request):
                         title=f"Search: {query_text[:50]}..."
                     )
                 
+                # Create event loop for async call
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                # Initialize and call async function
+                finder = ConversationalDealFinder()
+                result = loop.run_until_complete(
+                    finder.find_deals(
+                        query=query_text,
+                        context=str(user.id),
+                        user_id=str(conversation.id)
+                    )
+                )
+                
+                # Process the response
+                structured_deals = result.get('products', [])
+                
+                if not structured_deals:
+                    logger.warning(f"No products returned for query: {query_text}")
+                    return JsonResponse({
+                        "message_id": 0,
+                        "conversation_id": conversation.id,
+                        "response": "I couldn't find any products matching your query. Try being more specific or changing your search terms.",
+                        "deals": []
+                    })
+                
+                # Format deals for frontend - this array will be used directly
+                formatted_deals = []
+                if 'products' in result:
+                    logger.debug(f"Raw products received: {len(result['products'])} items")
+                    for product in result['products']:
+                        try:
+                            # Safely extract price - accept either string or direct numeric value
+                            price = None
+                            if isinstance(product.get('price'), (int, float)):
+                                price = float(product.get('price'))
+                            else:
+                                price_str = str(product.get('price', '')).strip()
+                                if price_str:
+                                    try:
+                                        price = float(re.sub(r'[^\d.]', '', price_str.split()[0]))
+                                    except (ValueError, IndexError):
+                                        logger.debug(f"Could not parse price: {price_str}")
+                                        continue
+                            
+                            if price is None:
+                                logger.debug(f"Skipping product with no price: {product.get('title')}")
+                                continue
+                                
+                            # Handle original price
+                            original_price = None
+                            if isinstance(product.get('original_price'), (int, float)):
+                                original_price = float(product.get('original_price'))
+                            elif 'original_price' in product:
+                                try:
+                                    original_str = str(product['original_price']).strip()
+                                    if original_str:
+                                        original_price = float(re.sub(r'[^\d.]', '', original_str))
+                                except (ValueError, AttributeError):
+                                    pass
+                            
+                            # Format data specifically for the React frontend's expected structure
+                            formatted_deal = {
+                                'id': product.get('product_id', '') or product.get('id', ''),
+                                'name': product.get('title', 'No title'),  # Frontend expects 'name'
+                                'currentPrice': price,  # Frontend uses camelCase
+                                'originalPrice': original_price,  # Frontend uses camelCase
+                                'image_url': product.get('image_url', '') or product.get('thumbnail', ''),  # Try both field names
+                                'productLink': product.get('url', '#'),  # Frontend expects 'productLink'
+                                'retailer': product.get('retailer', 'Online retailer'),
+                                'description': product.get('description', '')
+                            }
+                            
+                            # Calculate savings if possible
+                            if original_price and price and original_price > price:
+                                formatted_deal['savings'] = {
+                                    'amount': original_price - price,
+                                    'percent': int((original_price - price) / original_price * 100)
+                                }
+                                
+                            formatted_deals.append(formatted_deal)
+                            logger.debug(f"Added formatted product: {formatted_deal['name']}")
+                            
+                        except Exception as e:
+                            logger.error(f"Product formatting error: {str(e)}", exc_info=True)
+                            continue
+                
                 # Save user message
                 user_message = ConversationMessage.objects.create(
                     conversation=conversation,
@@ -314,62 +291,16 @@ def user_query_api_view(request):
                     content=query_text
                 )
                 
-                # Get deals and conversation context
-                result = deal_finder.find_deals(query_text, str(user.id), conversation.id if conversation else None)
-                
-                # Process deals into the expected format
-                structured_deals = []
-                for retailer, deals in result['deals'].items():
-                    if not isinstance(deals, list):
-                        continue
-                        
-                    for deal in deals:
-                        try:
-                            # Calculate savings
-                            savings_amount = None
-                            savings_percentage = None
-                            if getattr(deal, 'original_price', None) and getattr(deal, 'price', None):
-                                try:
-                                    original_price = float(deal.original_price)
-                                    current_price = float(deal.price)
-                                    if original_price > current_price:
-                                        savings_amount = str(original_price - current_price)
-                                        savings_percentage = str((1 - current_price/original_price) * 100)
-                                except (ValueError, TypeError):
-                                    pass
-
-                            enhanced_description = deal_finder.generate_product_description(deal, query_text)
-
-                            structured_deal = {
-                                'product_id': getattr(deal, 'product_id', ''),
-                                'name': getattr(deal, 'title', 'No title available'),
-                                'currentPrice': str(getattr(deal, 'price', 'N/A')),
-                                'originalPrice': str(deal.original_price) if getattr(deal, 'original_price', None) else None,
-                                'description': enhanced_description,
-                                'rating': getattr(deal, 'rating', None),
-                                'productLink': getattr(deal, 'url', '#'),
-                                'image_url': getattr(deal, 'image_url', None),
-                                'retailer': retailer.capitalize(),
-                                'savings': {
-                                    'amount': savings_amount,
-                                    'percentage': savings_percentage
-                                },
-                                'condition': getattr(deal, 'condition', None),
-                                'shipping_info': getattr(deal, 'shipping_info', None),
-                                'expanded': False  # Default to collapsed
-                            }
-                            structured_deals.append(structured_deal)
-                        except Exception as e:
-                            logger.error(f"Error processing deal: {str(e)}")
-                            continue
+                # Create AI response message
+                ai_response_text = result.get('comparison', result.get('message', 'Here are some options:'))
                 
                 # Save assistant message with search results
                 assistant_message = ConversationMessage.objects.create(
                     conversation=conversation,
                     role='assistant',
-                    content=result.get('response', result.get('comparison', 'Here are some options:')),
-                    search_results=structured_deals,
-                    has_products=bool(structured_deals)
+                    content=ai_response_text,
+                    search_results=formatted_deals,  # Use the formatted deals for frontend
+                    has_products=bool(formatted_deals)
                 )
                 
                 # Get user preferences
@@ -381,19 +312,17 @@ def user_query_api_view(request):
                     "favorite_categories": getattr(user_prefs, 'favorite_categories', None)
                 }
                 
-                return Response({
-                    "conversation_id": conversation.id,
+                # Add debug log to see the final response structure
+                logger.debug(f"Returning {len(formatted_deals)} formatted deals to frontend")
+                for deal in formatted_deals[:2]:  # Log first two deals for debugging
+                    logger.debug(f"  Deal: {deal['name']}, Price: {deal['currentPrice']}")
+                
+                return JsonResponse({
                     "message_id": assistant_message.id,
-                    "query": query_text,
-                    "response": result['response'],  # The AI-generated message
-                    "products": structured_deals,
-                    "comparison": result.get('comparison', ''),  # Separate comparison text
-                    "deals": structured_deals,
-                    "followup_questions": result.get('followup_questions', ''),
-                    "user_preferences": preferences,
-                    "timestamp": assistant_message.created_at.isoformat(),
-                    "query_understanding": result.get('query_understanding', '')
-                }, status=status.HTTP_200_OK)
+                    "conversation_id": conversation.id,
+                    "response": ai_response_text,  # Use the AI response text
+                    "deals": formatted_deals  # Return the properly formatted deals array
+                })
         
         except Exception as e:
             logger.exception(f"Error processing query: {str(e)}")
@@ -697,7 +626,7 @@ class CreateUserView(generics.CreateAPIView):
     
     def perform_create(self, serializer):
         try:
-            # Check if email already exists
+#             # Check if email already exists
             email = serializer.validated_data.get('email')
             if CustomUser.objects.filter(email=email).exists():
                 raise serializers.ValidationError({
