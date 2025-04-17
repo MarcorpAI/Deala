@@ -740,17 +740,25 @@ class ConversationalDealFinder:
         self.provider = DealAggregator()
         self.provider.set_llm(self)
         
-        self.memory = ConversationBufferMemory(
-            memory_key="chat_history",
-            return_messages=True
-        )
-        self.user_preferences = {}
-
+        # Initialize query cache
+        self.query_cache = {}
+        
+        # Initialize conversation state tracker
         self.conversation_state = {
             'current_products': [],
-            'search_intent': None,
-            'user_preferences': {}
+            'last_query': '',
+            'last_category': '',
+            'applied_filters': {},
+            'last_intent': None,
+            'conversation_turn': 0,
+            'product_references': {},
+            'user_preferences': {},
+            # Keywords extracted from user queries
+            'keywords': set(),
+            # Last action taken
+            'last_action': None
         }
+        
         self.extractor = UniversalSearchExtractor()
         self.context_resolver = ContextResolver(self.llm)
         self.ranker = ProductRanker(self.llm)
@@ -818,32 +826,170 @@ class ConversationalDealFinder:
             'shared_context': product.get('shared_context', {})
         }
 
-    async def detect_intent(self, query: str, context: str = "") -> dict:
+    async def analyze_intent(self, query: str) -> dict:
         """
-        Enhanced intent detection with context resolution
+        Advanced query intent analyzer that detects various types of user intents
         """
-        lower_query = query.lower()
-        followup_terms = [
-            "which of these", "which of those", "which is best", "which is cheapest", "out of these", "out of those",
-            "compare", "between these", "between those"
-        ]
+        try:
+            # Check if we have previous products in our conversation state
+            has_previous_products = len(self.conversation_state['current_products']) > 0
+            lower_query = query.lower().strip()
+            
+            # Create a prompt for the LLM to analyze the intent
+            intent_prompt = ChatPromptTemplate.from_template("""
+            You are an intent classifier for a shopping assistant. Analyze the user's message and determine the intent.
+            
+            Previous conversation context:
+            - Last query: {last_query}
+            - Last category searched: {last_category}
+            - Previous products shown to user: {has_products}
+            
+            Current query: "{query}"
+            
+            Classify this as ONE of these intents:
+            - new_search: User wants to search for a completely new product category
+            - refine: User wants to refine previous search with new filters or constraints
+            - comparison: User wants to compare previously shown products
+            - recommendation: User wants recommendations from previous results
+            - question: User is asking a specific question about previously shown product(s)
+            - clarification: User is asking for clarification about a specific product
+            - confirmation: User is confirming or affirming something
+            
+            Also determine:
+            - references_previous: Does the query reference previously shown products? (true/false)
+            - specific_product_reference: Does the query mention a specific product from previous results? (true/false)
+            - persona: Any specific persona or use case mentioned (e.g., "programmer", "gamer", "office", etc.)
+            
+            Output format (JSON):
+            ```json
+            {{
+                "intent": "[intent_type]",
+                "references_previous": true/false,
+                "specific_product_reference": true/false,
+                "persona": "[persona if mentioned, otherwise null]",
+                "requires_search": true/false,
+                "explanation": "brief explanation of classification"
+            }}
+            ```
+            Output only valid JSON without additional text.
+            """)
+            
+            # Generate the analysis using the LLM
+            chain = intent_prompt | self.llm
+            response = await chain.ainvoke({
+                "query": query,
+                "last_query": self.conversation_state['last_query'] or "None",
+                "last_category": self.conversation_state['last_category'] or "None",
+                "has_products": "Yes, showing " + str(len(self.conversation_state['current_products'])) + " products" if has_previous_products else "No previous products"
+            })
+            
+            # Extract the JSON from the response
+            import re
+            import json
+            
+            # Extract JSON from the response content
+            content = response.content if hasattr(response, 'content') else str(response)
+            json_match = re.search(r'```json\s*({.*?})\s*```', content, re.DOTALL)
+            
+            if json_match:
+                json_str = json_match.group(1)
+            else:
+                # Try to find any JSON-like structure
+                json_match = re.search(r'{.*}', content, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(0)
+                else:
+                    raise ValueError("Could not extract JSON from LLM response")
+            
+            # Parse the extracted JSON
+            intent_analysis = json.loads(json_str)
+            
+            # Log the analysis for debugging
+            logger.debug(f"Intent analysis for '{query}': {intent_analysis}")
+            
+            # Store the intent in conversation state
+            self.conversation_state['last_intent'] = intent_analysis['intent']
+            
+            return intent_analysis
+            
+        except Exception as e:
+            logger.error(f"Error in intent analysis: {str(e)}", exc_info=True)
+            # Fallback to a simple analysis based on pattern matching
+            return self._fallback_intent_analysis(query)
+    
+    async def _fallback_intent_analysis(self, query: str) -> dict:
+        """
+        Simple rule-based intent analysis as a fallback when LLM analysis fails
+        """
+        lower_query = query.lower().strip()
+        has_previous_products = len(self.conversation_state['current_products']) > 0
         
-        # First check for obvious comparison intent
-        if any(term in lower_query for term in followup_terms):
+        # Comparison intent
+        comparison_terms = ["which", "which one", "which is", "compare", "better", "best", "difference", "vs", "versus"]
+        if has_previous_products and any(term in lower_query for term in comparison_terms):
             return {
                 'intent': 'comparison',
+                'references_previous': True,
+                'specific_product_reference': False,
+                'persona': None,
                 'requires_search': False,
-                'explanation': 'Direct comparison request'
+                'explanation': 'User wants to compare previous products'
             }
             
-        # Then check for follow-up intent
-        followup_terms = ["this one", "that one", "the first one", "the last one", "previous results"]
-        if any(term in lower_query for term in followup_terms) and self.conversation_state['current_products']:
+        # Specific product reference
+        reference_terms = ["this one", "that one", "the first", "the second", "the last", "number", "#"]
+        if has_previous_products and any(term in lower_query for term in reference_terms):
             return {
-                'intent': 'followup',
+                'intent': 'question',
+                'references_previous': True,
+                'specific_product_reference': True,
+                'persona': None,
                 'requires_search': False,
-                'explanation': 'Follow-up reference detected'
+                'explanation': 'User is asking about a specific product'
             }
+            
+        # Recommendation request
+        recommendation_terms = ["recommend", "suggestion", "best for", "good for", "ideal for", "suitable for"]
+        persona_match = None
+        for term in recommendation_terms:
+            if term in lower_query:
+                # Try to extract persona (e.g., "best for programmers")
+                import re
+                persona_match = re.search(fr"{term}\s+([\w\s]+)", lower_query)
+                if persona_match:
+                    break
+                    
+        if has_previous_products and (any(term in lower_query for term in recommendation_terms) or persona_match):
+            return {
+                'intent': 'recommendation',
+                'references_previous': True,
+                'specific_product_reference': False,
+                'persona': persona_match.group(1) if persona_match else None,
+                'requires_search': False,
+                'explanation': 'User wants recommendations from previous results'
+            }
+            
+        # Refinement intent
+        refinement_terms = ["filter", "show me", "only", "just", "under", "over", "cheaper", "more expensive"]
+        if has_previous_products and any(term in lower_query for term in refinement_terms):
+            return {
+                'intent': 'refine',
+                'references_previous': True,
+                'specific_product_reference': False,
+                'persona': None,
+                'requires_search': True,
+                'explanation': 'User wants to refine previous search results'
+            }
+            
+        # Default to new search if we have no clues or no previous products
+        return {
+            'intent': 'new_search',
+            'references_previous': False,
+            'specific_product_reference': False,
+            'persona': None,
+            'requires_search': True,
+            'explanation': 'New product search'
+        }
             
         # Finally use LLM for ambiguous cases
         try:
@@ -864,6 +1010,293 @@ class ConversationalDealFinder:
                 'intent': 'new_search',
                 'requires_search': True,
                 'explanation': 'Fallback to search'
+            }
+
+    async def _handle_recommendation_intent(self, query: str, persona: str = None) -> Dict:
+        """
+        Handle recommendation requests for previous products based on persona or use case
+        """
+        current_products = self.conversation_state['current_products']
+        if not current_products:
+            logger.warning("Recommendation intent detected but no previous products available")
+            return {
+                'message': "I don't have any products to recommend from. Could you start with a product search first?",
+                'products': [],
+                'followup_questions': []
+            }
+        
+        try:
+            # Extract persona if not provided but mentioned in query
+            if not persona:
+                persona_terms = ["for", "best for", "good for", "ideal for", "suitable for"]
+                for term in persona_terms:
+                    if term in query.lower():
+                        import re
+                        match = re.search(fr"{term}\s+([\w\s]+)", query.lower())
+                        if match:
+                            persona = match.group(1).strip()
+                            break
+            
+            persona = persona or "general use"
+            
+            # Create a recommendation prompt
+            recommendation_prompt = ChatPromptTemplate.from_template("""
+            You are a helpful shopping assistant. The user is looking for recommendations for {persona}.
+            
+            Based on their previous search for "{last_query}", you need to rank and recommend the most suitable products.
+            
+            Products available:
+            {product_list}
+            
+            Analyze these products and recommend the best options for {persona}, explaining briefly why each is suitable.
+            Focus on specific features or attributes that make each product good for this use case.
+            
+            Format your response as a natural-sounding recommendation, not a list.
+            Keep it conversational and helpful, addressing their specific use case of {persona}.
+            """)
+            
+            # Format product list
+            product_list = []
+            for i, product in enumerate(current_products[:10]):  # Limit to first 10 products
+                product_name = product.get('name') or product.get('title', f"Product {i+1}")
+                price = product.get('currentPrice') or product.get('price', 'unknown price')
+                if isinstance(price, (int, float)):
+                    price = f"${price:.2f}"
+                retailer = product.get('retailer', 'unknown retailer')
+                product_list.append(f"{i+1}. {product_name} ({price} from {retailer})")
+            
+            # Generate recommendation
+            chain = recommendation_prompt | self.llm
+            response = await chain.ainvoke({
+                "persona": persona,
+                "last_query": self.conversation_state['last_query'],
+                "product_list": "\n".join(product_list)
+            })
+            
+            # Keep the same products but with a new personalized message
+            return {
+                'message': response.content if hasattr(response, 'content') else str(response),
+                'products': current_products,  # Return the same products with new recommendations
+                'followup_questions': self._generate_followup_questions(current_products, query, persona)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error handling recommendation intent: {str(e)}", exc_info=True)
+            return {
+                'message': f"Based on your request for {persona}, I'd recommend checking out the options I found earlier.",
+                'products': current_products,
+                'followup_questions': []
+            }
+    
+    async def _handle_comparison_intent(self, query: str) -> Dict:
+        """
+        Handle comparison requests between products from previous search results
+        """
+        current_products = self.conversation_state['current_products']
+        if not current_products:
+            logger.warning("Comparison intent detected but no previous products available")
+            return {
+                'message': "I don't have any products to compare. Could you start with a product search first?",
+                'products': [],
+                'followup_questions': []
+            }
+        
+        try:
+            # Extract product references (e.g., "first", "second", specific names)
+            import re
+            
+            # Check for specific product indices
+            first_product = None
+            second_product = None
+            
+            # Try to match product references like "the first and third"
+            # or specific names
+            
+            # Define common reference patterns
+            ordinal_refs = {
+                "first": 0, "second": 1, "third": 2, "fourth": 3, "fifth": 4,
+                "1st": 0, "2nd": 1, "3rd": 2, "4th": 3, "5th": 4,
+                "#1": 0, "#2": 1, "#3": 2, "#4": 3, "#5": 4,
+                "1": 0, "2": 1, "3": 2, "4": 3, "5": 4
+            }
+            
+            # Check for common reference patterns
+            referenced_indices = []
+            for ref, idx in ordinal_refs.items():
+                if ref in query.lower():
+                    if idx < len(current_products):
+                        referenced_indices.append(idx)
+            
+            # If we don't have specific references, compare the top 2-3 products
+            if len(referenced_indices) < 2:
+                referenced_indices = [0, 1] if len(current_products) >= 2 else [0]
+            
+            # Get the referenced products (at most 3)
+            referenced_products = [current_products[idx] for idx in referenced_indices[:3] if idx < len(current_products)]
+            
+            # Create a comparison prompt
+            comparison_prompt = ChatPromptTemplate.from_template("""
+            You are a helpful shopping assistant. The user wants to compare products from their previous search.
+            
+            Products to compare:
+            {product_list}
+            
+            The user's original search query was: "{last_query}"
+            Their comparison request was: "{comparison_query}"
+            
+            Please provide a detailed comparison of these products, focusing on:
+            1. Price and value for money
+            2. Key features and specifications
+            3. Advantages and disadvantages of each
+            4. Which one might be most suitable and why
+            
+            Make your comparison conversational, balanced, and helpful. Include specific details from each product in your response.
+            """)
+            
+            # Format product list for comparison
+            product_list = []
+            for i, product in enumerate(referenced_products):
+                product_name = product.get('name') or product.get('title', f"Product {i+1}")
+                price = product.get('currentPrice') or product.get('price', 'unknown price')
+                if isinstance(price, (int, float)):
+                    price = f"${price:.2f}"
+                retailer = product.get('retailer', 'unknown retailer')
+                features = product.get('description', 'No features available')
+                product_list.append(f"Product {i+1}: {product_name}\nPrice: {price}\nRetailer: {retailer}\nFeatures: {features}")
+            
+            # Generate comparison
+            chain = comparison_prompt | self.llm
+            response = await chain.ainvoke({
+                "product_list": "\n\n".join(product_list),
+                "last_query": self.conversation_state['last_query'],
+                "comparison_query": query
+            })
+            
+            # Return the comparison results
+            return {
+                'message': response.content if hasattr(response, 'content') else str(response),
+                'products': referenced_products,  # Return only the compared products
+                'followup_questions': self._generate_followup_questions(referenced_products, query)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error handling comparison intent: {str(e)}", exc_info=True)
+            return {
+                'message': "I've looked at the options you mentioned. They each have different features that might suit different needs.",
+                'products': current_products[:3],  # Return the top 3 products as a fallback
+                'followup_questions': []
+            }
+    
+    async def _safe_analyze_intent(self, query: str) -> Dict:
+        """
+        Safely analyze user intent with exception handling
+        """
+        try:
+            # Update the last query in conversation state
+            self.conversation_state['last_query'] = query
+            
+            # Get the actual intent analysis
+            intent_result = await self.analyze_intent(query)
+            
+            # Store the intent for future reference
+            self.conversation_state['last_intent'] = intent_result.get('intent')
+            
+            return intent_result
+        except Exception as e:
+            logger.error(f"Intent analysis failed: {str(e)}", exc_info=True)
+            # Fallback to a safe default
+            return {
+                'intent': 'new_search',
+                'requires_search': True,
+                'references_previous': False,
+                'explanation': f"Fallback due to error: {str(e)}"
+            }
+            
+    async def _handle_question_intent(self, query: str) -> Dict:
+        """
+        Handle specific questions about products from previous results
+        """
+        current_products = self.conversation_state['current_products']
+        if not current_products:
+            logger.warning("Question intent detected but no previous products available")
+            return {
+                'message': "I don't have any products to provide information about. Could you start with a product search first?",
+                'products': [],
+                'followup_questions': []
+            }
+            
+        try:
+            # Try to determine which product the user is asking about
+            import re
+            
+            # Define common reference patterns
+            ordinal_refs = {
+                "first": 0, "second": 1, "third": 2, "fourth": 3, "fifth": 4,
+                "1st": 0, "2nd": 1, "3rd": 2, "4th": 3, "5th": 4,
+                "#1": 0, "#2": 1, "#3": 2, "#4": 3, "#5": 4,
+                "1": 0, "2": 1, "3": 2, "4": 3, "5": 4,
+                "this one": 0, "that one": 0, "the one": 0
+            }
+            
+            # Check for common reference patterns
+            referenced_index = 0  # Default to the first product
+            for ref, idx in ordinal_refs.items():
+                if ref in query.lower():
+                    if idx < len(current_products):
+                        referenced_index = idx
+                        break
+            
+            # Get the referenced product
+            product = current_products[referenced_index] if referenced_index < len(current_products) else current_products[0]
+            
+            # Create a question answering prompt
+            qa_prompt = ChatPromptTemplate.from_template("""
+            You are a helpful shopping assistant. The user has a question about a product from their previous search.
+            
+            The user's question is: "{query}"
+            
+            The product they are asking about is:
+            Name: {product_name}
+            Price: {product_price}
+            Retailer: {product_retailer}
+            Description: {product_description}
+            
+            Please answer their question as specifically as possible using the information available.
+            If the exact information isn't available, provide a helpful response based on similar products or general knowledge.
+            Keep your response conversational and friendly.
+            """)
+            
+            # Format product info
+            product_name = product.get('name') or product.get('title', "This product")
+            product_price = product.get('currentPrice') or product.get('price', 'unknown price')
+            if isinstance(product_price, (int, float)):
+                product_price = f"${product_price:.2f}"
+            product_retailer = product.get('retailer', 'unknown retailer')
+            product_description = product.get('description', 'No detailed description available')
+            
+            # Generate answer
+            chain = qa_prompt | self.llm
+            response = await chain.ainvoke({
+                "query": query,
+                "product_name": product_name,
+                "product_price": product_price,
+                "product_retailer": product_retailer,
+                "product_description": product_description
+            })
+            
+            # Return the answer with just the referenced product
+            return {
+                'message': response.content if hasattr(response, 'content') else str(response),
+                'products': [product],  # Return only the referenced product
+                'followup_questions': self._generate_followup_questions([product], query)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error handling question intent: {str(e)}", exc_info=True)
+            return {
+                'message': f"Regarding your question about the product, I can tell you that it's available for {current_products[0].get('currentPrice') or current_products[0].get('price', 'a competitive price')} and is sold by {current_products[0].get('retailer', 'a reputable retailer')}.",
+                'products': [current_products[0]],  # Return the first product as a fallback
+                'followup_questions': []
             }
 
     async def generate_product_description(self, product: ProductDeal, query: str) -> str:
@@ -910,23 +1343,24 @@ class ConversationalDealFinder:
         if 'user_preferences' not in self.conversation_state:
             self.conversation_state['user_preferences'] = {}
             
-        if user_id and user_id not in self.conversation_state['user_preferences']:
-            self.conversation_state['user_preferences'][user_id] = {
-                'persona': None,
-                'preferred_condition': None,
-                'max_price': None,
-                'min_rating': None
-            }
-            
         return self.conversation_state['user_preferences'].get(user_id, {})
 
     async def find_deals(self, query: Union[str, Dict], context: str = "", user_id: str = None) -> Dict:
         """
-        Safely handle deal finding with comprehensive error checking
+        Conversational product finder that handles both new searches and contextual follow-ups
         """
         # Initialize state if missing
         if not hasattr(self, 'conversation_state'):
-            self.conversation_state = {'last_query': '', 'current_products': []}
+            self.conversation_state = {
+                'last_query': '',
+                'last_category': '',
+                'current_products': [],
+                'last_intent': None,
+                'conversation_turn': 0,
+                'applied_filters': {},
+                'product_references': {},
+                'keywords': set(),
+            }
             
         try:
             logger.info(f"Starting find_deals for query: {query} | context: {context}")
@@ -943,57 +1377,110 @@ class ConversationalDealFinder:
             if not query_str.strip():
                 logger.warning("Empty query received")
                 return self._empty_response("Please provide a search query")
-                
-            # Update state
-            self.conversation_state['last_query'] = query_str
             
-            # Process intent
-            intent_result = await self._safe_detect_intent(query_str, context)
+            # Update conversation turn counter
+            self.conversation_state['conversation_turn'] += 1
+            is_first_turn = self.conversation_state['conversation_turn'] == 1
+                
+            # Analyze user intent - categorize as new search, followup, comparison, etc.
+            intent_result = await self._safe_analyze_intent(query_str)
+            intent_type = intent_result.get('intent', 'new_search')
+            references_previous = intent_result.get('references_previous', False)
+            persona = intent_result.get('persona')
             requires_search = intent_result.get('requires_search', True)
             
-            # Prepare search terms
-            search_terms = self._build_search_terms(query_str, context, requires_search)
-            logger.debug(f"Final search terms: {search_terms}")
+            logger.info(f"Detected intent: {intent_type} | Requires search: {requires_search} | References previous: {references_previous}")
             
-            # Execute search
-            products = []
-            if requires_search:
+            # If first query or definitely a new search, just do a standard search
+            if is_first_turn or intent_type == 'new_search' or not self.conversation_state['current_products']:
+                # Do a regular search
+                search_terms = self._build_search_terms(query_str, context, True)
                 products = await self._execute_product_search(search_terms)
+                
+                # Store search results and metadata
                 self.conversation_state['current_products'] = products
+                
+                # Try to extract category from query
+                category_words = query_str.lower().split()
+                category_words = [w for w in category_words if len(w) > 3 and w not in ['show', 'find', 'get', 'want', 'need', 'looking', 'search']]
+                if category_words:
+                    self.conversation_state['last_category'] = category_words[0]
+                
+                # Generate conversational response
+                if products:
+                    ai_message = await self._generate_conversational_response(products, query_str)
+                else:
+                    ai_message = "I couldn't find any products that match your criteria. Would you like to try a different search?"
+                    
+                return {
+                    'message': ai_message,
+                    'products': products,
+                    'followup_questions': self._generate_followup_questions(products, query_str, user_id) if products else []
+                }
             
-            # Generate a truly AI conversational response based on the products found
+            # Handle different types of follow-up intents
+            if intent_type == 'recommendation':
+                # User wants recommendations from previous results based on a persona/use case
+                return await self._handle_recommendation_intent(query_str, persona)
+                
+            elif intent_type == 'comparison':
+                # User wants to compare products from previous results
+                return await self._handle_comparison_intent(query_str)
+                
+            elif intent_type == 'question' or intent_type == 'clarification':
+                # User has a specific question about a product
+                return await self._handle_question_intent(query_str)
+                
+            elif intent_type == 'refine':
+                # User wants to refine previous search results
+                # Combine previous search with new constraints
+                combined_query = f"{self.conversation_state['last_query']} {query_str}"
+                search_terms = self._build_search_terms(combined_query, context, True)
+                products = await self._execute_product_search(search_terms)
+                
+                # Update conversation state
+                self.conversation_state['current_products'] = products
+                
+                # Generate response
+                if products:
+                    ai_message = await self._generate_conversational_response(products, combined_query)
+                    ai_message = f"Based on your refinement, {ai_message.lower()}"
+                else:
+                    ai_message = "I couldn't find any products that match your refined criteria. Would you like to try different filters?"
+                    
+                return {
+                    'message': ai_message,
+                    'products': products,
+                    'followup_questions': self._generate_followup_questions(products, query_str, user_id) if products else []
+                }
+            
+            # Default fallback - treat as a new search
+            search_terms = self._build_search_terms(query_str, context, True)
+            products = await self._execute_product_search(search_terms)
+            self.conversation_state['current_products'] = products
+            
             if products:
-                # Use the LLM to create a dynamic, personalized response
                 ai_message = await self._generate_conversational_response(products, query_str)
             else:
                 ai_message = "I couldn't find any products that match your criteria. Would you like to try a different search?"
                 
             return {
-                'message': ai_message,  # Use the AI-generated message
+                'message': ai_message,
                 'products': products,
                 'followup_questions': self._generate_followup_questions(products, query_str, user_id) if products else []
             }
-            
         except Exception as e:
-            logger.error(f"Critical error in find_deals: {str(e)}", exc_info=True)
-            return self._empty_response(f"Sorry, we encountered an error: {str(e)}")
-            
-    async def _safe_detect_intent(self, query: str, context: str) -> Dict:
-        """Safely wrapped intent detection"""
-        try:
-            return await self.detect_intent(query, context)
-        except Exception as e:
-            logger.warning(f"Intent detection failed: {str(e)}")
-            return {'intent': 'new_search', 'requires_search': True}
+            logger.error(f"Error in find_deals: {str(e)}", exc_info=True)
+            return self._empty_response(f"I encountered an issue while searching: {str(e)}")
             
     async def _execute_product_search(self, search_terms: str) -> List[Dict]:
-        """Execute product search with real API"""
+        """Execute the actual product search using the search provider"""
         # Check cache first
         cached = self.query_cache.get(search_terms)
-        if cached and datetime.now() - cached['timestamp'] < self.cache_expiry:
-            logger.info(f"Using cached results for: {search_terms}")
+        if cached and (datetime.now() - cached['timestamp']).total_seconds() < 3600:  # 1 hour cache
+            logger.info(f"Using cached results for query: {search_terms}")
             return cached['products']
-        
+            
         try:
             # First validate we should proceed
             if not search_terms.strip():

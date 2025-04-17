@@ -197,12 +197,35 @@ def user_query_api_view(request):
                         title=f"Search: {query_text[:50]}..."
                     )
                 
+                # Get or create conversation state for this conversation
+                from .models import ConversationState
+                try:
+                    conv_state = ConversationState.objects.get(conversation=conversation)
+                except ConversationState.DoesNotExist:
+                    conv_state = ConversationState.objects.create(conversation=conversation)
+                
                 # Create event loop for async call
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 
-                # Initialize and call async function
+                # Initialize and call async function with state from database
                 finder = ConversationalDealFinder()
+                
+                # Load state from database
+                finder.conversation_state = {
+                    'current_products': conv_state.current_products,
+                    'last_query': conv_state.last_query,
+                    'last_category': conv_state.last_category,
+                    'applied_filters': conv_state.applied_filters,
+                    'last_intent': conv_state.last_intent,
+                    'conversation_turn': conv_state.conversation_turn,
+                    'product_references': conv_state.product_references,
+                    'user_preferences': conv_state.user_preferences,
+                    'keywords': set(conv_state.keywords),
+                    'last_action': conv_state.last_action
+                }
+                
+                # Run the AI search
                 result = loop.run_until_complete(
                     finder.find_deals(
                         query=query_text,
@@ -210,6 +233,19 @@ def user_query_api_view(request):
                         user_id=str(conversation.id)
                     )
                 )
+                
+                # Save updated state back to database
+                conv_state.current_products = finder.conversation_state.get('current_products', [])
+                conv_state.last_query = finder.conversation_state.get('last_query', '')
+                conv_state.last_category = finder.conversation_state.get('last_category', '')
+                conv_state.applied_filters = finder.conversation_state.get('applied_filters', {})
+                conv_state.last_intent = finder.conversation_state.get('last_intent', None)
+                conv_state.conversation_turn = finder.conversation_state.get('conversation_turn', 0)
+                conv_state.product_references = finder.conversation_state.get('product_references', {})
+                conv_state.user_preferences = finder.conversation_state.get('user_preferences', {})
+                conv_state.keywords = list(finder.conversation_state.get('keywords', []))
+                conv_state.last_action = finder.conversation_state.get('last_action', None)
+                conv_state.save()
                 
                 # Process the response
                 structured_deals = result.get('products', [])

@@ -149,6 +149,28 @@ class ConversationMessage(models.Model):
     
     class Meta:
         ordering = ['created_at']
+    
+
+class ConversationState(models.Model):
+    """Store conversation state for continuity between requests"""
+    conversation = models.OneToOneField(Conversation, on_delete=models.CASCADE, related_name="state")
+    current_products = models.JSONField(default=list)
+    last_query = models.TextField(blank=True)
+    last_category = models.CharField(max_length=100, blank=True)
+    applied_filters = models.JSONField(default=dict)
+    last_intent = models.CharField(max_length=50, blank=True, null=True)
+    conversation_turn = models.IntegerField(default=0)
+    product_references = models.JSONField(default=dict)
+    user_preferences = models.JSONField(default=dict)
+    keywords = models.JSONField(default=list)
+    last_action = models.CharField(max_length=50, blank=True, null=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def __str__(self):
+        return f"State for conversation {self.conversation.id}"
+    
+    class Meta:
+        ordering = ['-updated_at']
 
 
 
