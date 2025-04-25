@@ -6,10 +6,12 @@ import { ACCESS_TOKEN } from "../constants"
 import { motion, AnimatePresence } from "framer-motion"
 import { 
   Star, ArrowUp, Loader2, Menu, X, 
-  ChevronDown, ChevronUp, Bot, ShoppingCart
+  ChevronDown, ChevronUp, Bot, ShoppingCart,
+  PlusCircle, Check, AlertCircle
 } from "lucide-react"
 import { Skeleton } from "../components/ui/skeleton"
 import withSubscription from "../components/withSubscription"
+import CartPage from "./CartPage"
 
 const StarRating = ({ rating }) => {
   const numericRating = rating ? Number.parseFloat(rating) : 0
@@ -76,8 +78,31 @@ const MessageSkeleton = () => (
   </div>
 )
 
-const DealCard = ({ deal, onViewDeal }) => {
+const DealCard = ({ deal, onViewDeal, onAddToCart }) => {
   const [imageLoaded, setImageLoaded] = useState(false)
+  const [adding, setAdding] = useState(false)
+  const [added, setAdded] = useState(false)
+  const [error, setError] = useState(null)
+
+  const handleAddToCart = async (e) => {
+    e.stopPropagation()  // Prevent triggering onViewDeal
+    
+    if (adding || added) return
+    
+    setAdding(true)
+    setError(null)
+    
+    try {
+      await onAddToCart(deal)
+      setAdded(true)
+      setTimeout(() => setAdded(false), 2000)  // Reset after 2 seconds
+    } catch (err) {
+      setError('Failed to add')
+      setTimeout(() => setError(null), 2000)  // Clear error after 2 seconds
+    } finally {
+      setAdding(false)
+    }
+  }
 
   return (
     <motion.div
@@ -102,6 +127,28 @@ const DealCard = ({ deal, onViewDeal }) => {
             Save ${Number.parseFloat(deal.savings.amount).toFixed(2)}
           </div>
         )}
+        
+        {/* Add to cart button - top left */}
+        <button
+          onClick={handleAddToCart}
+          className={`absolute top-3 left-3 z-20 rounded-full p-1.5 transition-all duration-200 ${
+            adding ? 'bg-zinc-800/80 text-zinc-300' :
+            added ? 'bg-green-800/80 text-green-300 border border-green-700/50' : 
+            error ? 'bg-red-800/80 text-red-300 border border-red-700/50' :
+            'bg-zinc-900/80 hover:bg-zinc-800/80 text-zinc-300 hover:text-zinc-100 backdrop-blur-sm hover:scale-110'
+          }`}
+          disabled={adding}
+        >
+          {adding ? (
+            <Loader2 size={18} className="animate-spin" />
+          ) : added ? (
+            <Check size={18} />
+          ) : error ? (
+            <AlertCircle size={18} />
+          ) : (
+            <PlusCircle size={18} />
+          )}
+        </button>
       </div>
 
       <div className="relative z-20 p-6 flex flex-col flex-grow space-y-4">
@@ -150,18 +197,39 @@ const DealCard = ({ deal, onViewDeal }) => {
   )
 }
 
-const Message = ({ message, onExpandProducts, expanded }) => {
-  const getMessageContent = () => {
-    if (typeof message.content === 'string') return message.content
-    if (typeof message.content === 'object') return JSON.stringify(message.content)
-    return 'No message content'
+const Message = ({ message, onExpandProducts, expanded, onAddToCart }) => {
+  // Process the message content for display
+  const processMessageContent = () => {
+    // Make sure message.content exists and is a string
+    if (!message.content) {
+      console.error('Missing message content');
+      return { __html: 'Error displaying message' };
+    }
+    
+    // Convert to string if it's not already
+    let messageContent = message.content;
+    if (typeof messageContent !== 'string') {
+      console.warn('Message content is not a string, converting:', messageContent);
+      try {
+        messageContent = JSON.stringify(messageContent, null, 2);
+      } catch (err) {
+        console.error('Failed to stringify message content:', err);
+        return { __html: 'Error displaying complex message' };
+      }
+    }
+    
+    // Apply basic Markdown-like formatting
+    let content = messageContent
+      .replace(/\n/g, "<br />")
+      .replace(/<think>.*?<\/think>/gs, '')
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.*?)\*/g, '<em>$1</em>')
+      .trim();
+      
+    return { __html: content };
   }
-
-  const cleanContent = getMessageContent()
-    .replace(/<think>.*?<\/think>/gs, '')
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.*?)\*/g, '<em>$1</em>')
-    .trim()
+  
+  const cleanContent = processMessageContent()
 
   return (
     <div className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'} mb-6`}>
@@ -188,41 +256,45 @@ const Message = ({ message, onExpandProducts, expanded }) => {
             />
             
             {message.has_products && (
-              <div className="mt-5">
-                <button 
-                  onClick={() => onExpandProducts(message.id)}
-                  className="flex items-center gap-2 text-sm text-amber-400 hover:text-amber-300 transition-colors"
-                >
-                  {expanded ? (
-                    <>
-                      <ChevronUp size={16} />
-                      <span>Hide options</span>
-                    </>
-                  ) : (
-                    <>
-                      <ChevronDown size={16} />
-                      <span>Show options</span>
-                    </>
-                  )}
-                </button>
-                
-                {expanded && (
-                  <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    transition={{ duration: 0.3 }}
-                    className="mt-5 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3"
-                  >
-                    {(message.products || []).map((deal, index) => (
-                      <DealCard 
-                        key={index} 
-                        deal={deal} 
-                        onViewDeal={() => window.open(deal.productLink || '#', '_blank')} 
-                      />
-                    ))}
-                  </motion.div>
-                )}
+              <div className="text-amber-300 flex items-center cursor-pointer" onClick={() => onExpandProducts(message.id)}>
+                <div className="flex items-center">
+                  <ShoppingBag size={18} className="mr-1" />
+                  <div className="font-medium">
+                    {expanded ? "Hide Product Options" : `Show Product Options (${message.products?.length || 0})`}
+                  </div>
+                </div>
+                <ChevronRight 
+                  size={18} 
+                  className={`ml-1 transition-transform ${expanded ? "rotate-90" : ""}`} 
+                />
               </div>
+            )}
+            
+            {expanded && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                transition={{ duration: 0.3 }}
+                className="mt-5 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3"
+              >
+                {message.products && message.products.length > 0 ? (
+                  <div className="col-span-full mb-2 text-sm text-gray-400">
+                    Showing {message.products.length} products
+                  </div>
+                ) : (
+                  <div className="col-span-full mb-2 text-sm text-red-400 bg-red-900/20 p-2 rounded">
+                    No products to display. Check console for details.
+                  </div>
+                )}
+                {(message.products || []).map((deal, index) => (
+                  <DealCard 
+                    key={deal.id || index} 
+                    deal={deal} 
+                    onViewDeal={() => window.open(deal.productLink || '#', '_blank')} 
+                    onAddToCart={onAddToCart}
+                  />
+                ))}
+              </motion.div>
             )}
           </div>
         </div>
@@ -233,14 +305,55 @@ const Message = ({ message, onExpandProducts, expanded }) => {
 
 const Hero = () => {
   const [query, setQuery] = useState("")
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState("")
-  const [conversationId, setConversationId] = useState(null)
   const [messages, setMessages] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
   const [expandedMessages, setExpandedMessages] = useState({})
-  const [sidebarOpen, setSidebarOpen] = useState(false)
-  const textareaRef = useRef(null)
+  const [showMenu, setShowMenu] = useState(false)
+  const [showIntro, setShowIntro] = useState(true)
+  const [showCart, setShowCart] = useState(false)
+  const [cartItemCount, setCartItemCount] = useState(0)
+  const [sessionId, setSessionId] = useState(localStorage.getItem('dealSessionId') || null)
+
   const messagesEndRef = useRef(null)
+  const textareaRef = useRef(null)
+  const introBgRef = useRef(null)
+
+  useEffect(() => {
+    const checkScroll = () => {
+      if (introBgRef.current) {
+        const scrollPosition = window.scrollY
+        introBgRef.current.style.transform = `translateY(${scrollPosition * 0.5}px)`
+      }
+    }
+
+    window.addEventListener("scroll", checkScroll)
+    return () => window.removeEventListener("scroll", checkScroll)
+  }, [])
+  
+  // Check cart count when component mounts
+  useEffect(() => {
+    fetchCartCount()
+  }, [])
+  
+  // Function to fetch cart item count
+  const fetchCartCount = async () => {
+    try {
+      const response = await axios.get('/api/cart/view/', {
+        params: { session_id: sessionId }
+      })
+      
+      // Store the session ID if we get one back from the server
+      if (response.data.session_id && !sessionId) {
+        setSessionId(response.data.session_id)
+        localStorage.setItem('dealSessionId', response.data.session_id)
+      }
+      
+      setCartItemCount(response.data.item_count || 0)
+    } catch (err) {
+      console.error('Error fetching cart count:', err)
+    }
+  }
 
   useEffect(() => {
     const adjustHeight = () => {
@@ -279,7 +392,7 @@ const Hero = () => {
         "http://127.0.0.1:8000/api/user-query/",
         { 
           query, 
-          conversation_id: conversationId
+          conversation_id: sessionId
         },
         {
           headers: {
@@ -295,18 +408,70 @@ const Hero = () => {
       // Check if deals exist and restructure if needed
       const hasDeals = Array.isArray(data.deals) && data.deals.length > 0;
       
+      // Make sure the response is a string
+      let responseContent = data.response || "Here are some options:";
+      
+      // Handle the case where the response might be an object
+      if (typeof responseContent === 'object') {
+        console.warn('Response is an object instead of a string:', responseContent);
+        try {
+          // Try to convert to a meaningful string
+          responseContent = JSON.stringify(responseContent, null, 2);
+        } catch (err) {
+          console.error('Failed to stringify response object:', err);
+          responseContent = "[Error displaying response]";
+        }
+      }
+      
+      // Extra debugging for product data
+      if (hasDeals) {
+        console.log("Products found in response:", data.deals.length);
+        console.log("Sample product:", data.deals[0]);
+      } else {
+        console.log("No product deals in response. has_products:", data.has_products);
+      }
+      
       const assistantMessage = {
         id: data.message_id || Date.now(),
         role: "assistant",
-        content: data.response || "Here are some options:",
+        content: responseContent,
         has_products: hasDeals,
         products: data.deals || [] // Directly use the deals array from the response
       }
+      
+      // Force double-check that products are properly structured
+      if (assistantMessage.products && assistantMessage.products.length > 0) {
+        console.log("Products added to message:", assistantMessage.products.length);
+        // Ensure products have all required fields
+        assistantMessage.products = assistantMessage.products.map(product => ({
+          ...product,
+          id: product.id || Math.random().toString(36).substring(7),
+          name: product.name || product.title || "Product",
+          currentPrice: typeof product.currentPrice === 'number' ? product.currentPrice : 0,
+          image_url: product.image_url || "https://placehold.co/600x400/orange/white?text=Product"
+        }));
+      }
 
       setMessages((prev) => [...prev, assistantMessage])
+      
+      // Always log message to help with debugging
+      console.log("Added assistant message:", {
+        id: assistantMessage.id,
+        has_products: assistantMessage.has_products,
+        product_count: assistantMessage.products?.length || 0
+      });
+      
+      // Auto-expand messages with products
+      if (hasDeals) {
+        console.log("Auto-expanding product section for message:", assistantMessage.id);
+        setExpandedMessages(prev => ({
+          ...prev, 
+          [assistantMessage.id]: true // Automatically expand this product
+        }));
+      }
 
-      if (!conversationId && data.conversation_id) {
-        setConversationId(data.conversation_id)
+      if (!sessionId && data.conversation_id) {
+        setSessionId(data.conversation_id)
       }
     } catch (err) {
       console.error("Error occurred:", err)
@@ -324,23 +489,52 @@ const Hero = () => {
   }
 
   const toggleExpandMessage = (messageId) => {
-    setExpandedMessages(prev => ({
+    setExpandedMessages((prev) => ({
       ...prev,
-      [messageId]: !prev[messageId]
+      [messageId]: !prev[messageId],
     }))
+  }
+  
+  // Toggle cart visibility
+  const toggleCart = () => {
+    setShowCart(prev => !prev)
+  }
+
+  // Handle adding item to cart
+  const handleAddToCart = async (product) => {
+    try {
+      const response = await axios.post('/api/cart/add_item/', {
+        ...product,
+        session_id: sessionId
+      })
+      
+      // Update cart count
+      setCartItemCount(response.data.item_count || cartItemCount + 1)
+      
+      // Store session ID if needed
+      if (!sessionId && response.data.session_id) {
+        setSessionId(response.data.session_id)
+        localStorage.setItem('dealSessionId', response.data.session_id)
+      }
+      
+      return response
+    } catch (error) {
+      console.error('Error adding to cart:', error)
+      throw error
+    }
   }
 
   return (
     <div className="min-h-screen bg-zinc-950 flex flex-col">
       <button
-        onClick={() => setSidebarOpen(true)}
+        onClick={() => setShowMenu(true)}
         className="fixed top-5 left-5 z-30 p-2 rounded-md bg-zinc-900/80 backdrop-blur-sm border border-zinc-800 text-zinc-400 hover:text-zinc-100 transition-colors"
       >
         <Menu size={20} />
       </button>
 
       <AnimatePresence>
-        {sidebarOpen && (
+        {showMenu && (
           <motion.div
             className="fixed top-0 left-0 h-full bg-zinc-900/90 backdrop-blur-md border-r border-zinc-800 z-50 w-64 shadow-xl"
             initial={{ x: "-100%" }}
@@ -352,7 +546,7 @@ const Hero = () => {
               <div className="flex justify-between items-center mb-8 mt-2">
                 <h2 className="text-zinc-100 text-lg font-medium">Menu</h2>
                 <button
-                  onClick={() => setSidebarOpen(false)}
+                  onClick={() => setShowMenu(false)}
                   className="p-1.5 rounded-md hover:bg-zinc-800 text-zinc-400 hover:text-zinc-100 transition-colors"
                 >
                   <X size={18} />
@@ -362,8 +556,7 @@ const Hero = () => {
                 className="flex items-center gap-3 w-full p-2.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/70 transition-colors text-sm font-medium"
                 onClick={() => {
                   setMessages([])
-                  setConversationId(null)
-                  setSidebarOpen(false)
+                  setShowMenu(false)
                 }}
               >
                 <ShoppingCart size={18} />
@@ -430,6 +623,7 @@ const Hero = () => {
                   message={message}
                   onExpandProducts={toggleExpandMessage}
                   expanded={expandedMessages[message.id] || false}
+                  onAddToCart={handleAddToCart}
                 />
               ))}
               {loading && <MessageSkeleton />}
@@ -438,6 +632,17 @@ const Hero = () => {
           )}
         </div>
       </div>
+      
+      {/* Cart Modal */}
+      <AnimatePresence>
+        {showCart && (
+          <CartPage 
+            onClose={toggleCart} 
+            sessionId={sessionId}
+            onCartUpdate={fetchCartCount}
+          />
+        )}
+      </AnimatePresence>
 
       {messages.length > 0 && (
         <motion.div

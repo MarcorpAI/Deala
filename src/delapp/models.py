@@ -201,3 +201,54 @@ class UserDevice(models.Model):
 
     def __str__(self):
         return f"{self.user.email} - {self.device_id}"
+
+
+class Cart(models.Model):
+    """Shopping cart for saved products"""
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name="cart", null=True, blank=True)
+    session_id = models.CharField(max_length=255, blank=True, null=True, help_text="For anonymous users")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def __str__(self):
+        if self.user:
+            return f"Cart for {self.user.email}"
+        return f"Anonymous Cart {self.session_id[:8]}"
+    
+    class Meta:
+        ordering = ['-updated_at']
+        
+    @property
+    def total_items(self):
+        return self.items.count()
+    
+    @property
+    def total_price(self):
+        return sum(item.price for item in self.items.all() if item.price)
+        
+
+class SavedItem(models.Model):
+    """Individual product saved to a cart"""
+    cart = models.ForeignKey(Cart, on_delete=models.CASCADE, related_name="items")
+    product_id = models.CharField(max_length=255, blank=True)
+    title = models.CharField(max_length=255)
+    price = models.FloatField(null=True, blank=True)
+    original_price = models.FloatField(null=True, blank=True)
+    currency = models.CharField(max_length=5, default="USD")
+    image_url = models.URLField(max_length=1000, blank=True)
+    product_url = models.URLField(max_length=1000, blank=True)
+    retailer = models.CharField(max_length=100, blank=True)
+    description = models.TextField(blank=True)
+    category = models.CharField(max_length=100, blank=True, help_text="Optional category or tag")
+    created_at = models.DateTimeField(auto_now_add=True)
+    metadata = models.JSONField(default=dict, blank=True, help_text="Additional product data")
+    conversation = models.ForeignKey(Conversation, on_delete=models.SET_NULL, null=True, blank=True, 
+                                   help_text="Conversation where this item was saved from")
+    
+    def __str__(self):
+        return f"{self.title} (${self.price if self.price else 'No price'})"  
+    
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = "Saved Item"
+        verbose_name_plural = "Saved Items"

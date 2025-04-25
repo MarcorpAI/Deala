@@ -65,7 +65,6 @@ from rest_framework.decorators import permission_classes
 
 from django.http import JsonResponse
 from rest_framework.decorators import api_view
-from .llm_engine import ConversationalDealFinder
 import asyncio
 
 @api_view(['POST'])
@@ -208,61 +207,71 @@ def user_query_api_view(request):
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 
-                # Initialize and call async function with state from database
-                finder = ConversationalDealFinder()
+                # AGENT-BASED IMPLEMENTATION - Use the new agent instead of ConversationalDealFinder
+                from .agent.api import process_query
                 
-                # Load state from database
-                finder.conversation_state = {
-                    'current_products': conv_state.current_products,
-                    'last_query': conv_state.last_query,
-                    'last_category': conv_state.last_category,
-                    'applied_filters': conv_state.applied_filters,
-                    'last_intent': conv_state.last_intent,
-                    'conversation_turn': conv_state.conversation_turn,
-                    'product_references': conv_state.product_references,
-                    'user_preferences': conv_state.user_preferences,
-                    'keywords': set(conv_state.keywords),
-                    'last_action': conv_state.last_action
-                }
-                
-                # Run the AI search
+                # Run the agent-based search
                 result = loop.run_until_complete(
-                    finder.find_deals(
+                    process_query(
                         query=query_text,
-                        context=str(user.id),
-                        user_id=str(conversation.id)
+                        conversation_id=str(conversation.id),
+                        user_id=str(user.id)
                     )
                 )
                 
-                # Save updated state back to database
-                conv_state.current_products = finder.conversation_state.get('current_products', [])
-                conv_state.last_query = finder.conversation_state.get('last_query', '')
-                conv_state.last_category = finder.conversation_state.get('last_category', '')
-                conv_state.applied_filters = finder.conversation_state.get('applied_filters', {})
-                conv_state.last_intent = finder.conversation_state.get('last_intent', None)
-                conv_state.conversation_turn = finder.conversation_state.get('conversation_turn', 0)
-                conv_state.product_references = finder.conversation_state.get('product_references', {})
-                conv_state.user_preferences = finder.conversation_state.get('user_preferences', {})
-                conv_state.keywords = list(finder.conversation_state.get('keywords', []))
-                conv_state.last_action = finder.conversation_state.get('last_action', None)
+                # Map agent state to conversation state
+                # The agent will handle most state internally through its memory components
+                if 'agent_state' in result:
+                    agent_state = result['agent_state']
+                    conv_state.current_products = agent_state.get('current_products', [])
+                    conv_state.last_query = agent_state.get('last_query', query_text)
+                    conv_state.last_category = agent_state.get('last_category', '')
+                    conv_state.applied_filters = agent_state.get('applied_filters', {})
+                    conv_state.last_intent = agent_state.get('last_intent', None)
+                    conv_state.conversation_turn = agent_state.get('conversation_turn', conv_state.conversation_turn + 1)
+                    conv_state.product_references = agent_state.get('product_references', {})
+                    conv_state.user_preferences = agent_state.get('user_preferences', {})
+                    conv_state.keywords = agent_state.get('keywords', [])
+                    conv_state.last_action = agent_state.get('last_action', None)
+                else:
+                    # If no agent state is returned, increment conversation turn at minimum
+                    conv_state.conversation_turn += 1
+                    conv_state.last_query = query_text
+                    # Use products from agent response if available
+                    if 'products' in result:
+                        conv_state.current_products = result['products']
+                
                 conv_state.save()
                 
-                # Process the response
+                # Process the response from the agent
                 structured_deals = result.get('products', [])
+                is_mock_data = result.get('mock_data', False)
                 
+                # Add extra debug logging
+                logger.info(f"Agent result: products={len(structured_deals)}, is_mock_data={is_mock_data}, result_keys={list(result.keys())}")
+                
+                # If we have no products but response text mentions products, try to extract them from elsewhere
+                if not structured_deals and ('I found' in result.get('response', '') and 'product' in result.get('response', '')):
+                    logger.warning(f"Response mentions products but no 'products' in result, trying to find mock data")
+                    
+                    # See if there's a raw_products field we can use
+                    if 'raw_products' in result and isinstance(result['raw_products'], list) and result['raw_products']:
+                        structured_deals = result['raw_products']
+                        logger.info(f"Retrieved {len(structured_deals)} products from raw_products field")
+                    
                 if not structured_deals:
-                    logger.warning(f"No products returned for query: {query_text}")
+                    logger.warning(f"No products returned from agent for query: {query_text}")
                     return JsonResponse({
                         "message_id": 0,
                         "conversation_id": conversation.id,
-                        "response": "I couldn't find any products matching your query. Try being more specific or changing your search terms.",
+                        "response": result.get('response', "I couldn't find any products matching your query. Try being more specific or changing your search terms."),
                         "deals": []
                     })
                 
                 # Format deals for frontend - this array will be used directly
                 formatted_deals = []
                 if 'products' in result:
-                    logger.debug(f"Raw products received: {len(result['products'])} items")
+                    logger.debug(f"Raw products received from agent: {len(result['products'])} items")
                     for product in result['products']:
                         try:
                             # Safely extract price - accept either string or direct numeric value
@@ -328,7 +337,8 @@ def user_query_api_view(request):
                 )
                 
                 # Create AI response message
-                ai_response_text = result.get('comparison', result.get('message', 'Here are some options:'))
+                # The agent response is more structured, so prioritize getting the proper response text
+                ai_response_text = result.get('response', result.get('message', 'Here are some options:'))
                 
                 # Save assistant message with search results
                 assistant_message = ConversationMessage.objects.create(
@@ -339,26 +349,62 @@ def user_query_api_view(request):
                     has_products=bool(formatted_deals)
                 )
                 
-                # Get user preferences
-                user_prefs = result.get('user_preferences', {})
-                preferences = {
-                    "preferred_condition": getattr(user_prefs, 'preferred_condition', None),
-                    "max_price": getattr(user_prefs, 'max_price', None),
-                    "min_rating": getattr(user_prefs, 'min_rating', None),
-                    "favorite_categories": getattr(user_prefs, 'favorite_categories', None)
-                }
+                # Get follow-up questions if available from the agent
+                followup_questions = result.get('followup_questions', [])
                 
                 # Add debug log to see the final response structure
                 logger.debug(f"Returning {len(formatted_deals)} formatted deals to frontend")
                 for deal in formatted_deals[:2]:  # Log first two deals for debugging
                     logger.debug(f"  Deal: {deal['name']}, Price: {deal['currentPrice']}")
                 
-                return JsonResponse({
+                # Add helpful follow-up question suggestions if we have products
+                if formatted_deals and not followup_questions:
+                    followup_questions = [
+                        "Which of these products would you like to know more about?",
+                        "Would you like to see similar products?",
+                        "Would you like to filter these results by price?"
+                    ]
+                    
+                # Add explicit logging to confirm what's being returned to frontend
+                logger.info(f"API response: message_id={assistant_message.id}, conversation_id={conversation.id}, "
+                           f"has_products={bool(formatted_deals)}, product_count={len(formatted_deals)}, "
+                           f"first 50 chars of response: {ai_response_text[:50]}")
+                
+                # Add debug message to assist during development
+                debug_msg = (
+                    f"\n\nIMPORTANT: Debug Info - Products should display as cards.\n"
+                    f"                Product count: {len(formatted_deals)}\n"
+                    f"                First product: {formatted_deals[0]['name'] if formatted_deals else 'No products'}\n\n"
+                    f"                If you don't see product cards above, please refresh the page."
+                )
+                
+                # Log the actual structure of formatted_deals to debug the issue
+                logger.info(f"FORMATTED DEALS STRUCTURE: {json.dumps([{k: type(v).__name__ for k, v in deal.items()} for deal in formatted_deals[:1]]) if formatted_deals else 'Empty array'}")
+                
+                # The response data to send to frontend
+                response_data = {
                     "message_id": assistant_message.id,
                     "conversation_id": conversation.id,
-                    "response": ai_response_text,  # Use the AI response text
-                    "deals": formatted_deals  # Return the properly formatted deals array
-                })
+                    "response": ai_response_text + "\n\n" + debug_msg,  # Always include debug info for now
+                    "deals": formatted_deals,  # Return the properly formatted deals array
+                    "followup_questions": followup_questions,  # Add follow-up questions if provided by agent
+                    "debug_info": {
+                        "has_products": bool(formatted_deals),
+                        "product_count": len(formatted_deals),
+                        "first_product": formatted_deals[0] if formatted_deals else None,
+                        "source": "mock_data" if result.get('mock_data', False) else "api_data"
+                    }
+                }
+                
+                # Important: The frontend definitely needs these fields at the top level
+                response_data["has_products"] = bool(formatted_deals)
+                
+                # Force log the full response for debugging
+                logger.info(f"FINAL RESPONSE TO FRONTEND: message_id={response_data['message_id']}, "  
+                           f"has_products={response_data['has_products']}, "
+                           f"deals_count={len(response_data['deals'])}")
+                
+                return JsonResponse(response_data)
         
         except Exception as e:
             logger.exception(f"Error processing query: {str(e)}")
